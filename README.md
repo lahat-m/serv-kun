@@ -118,6 +118,20 @@ Boot + Postgres project set up the same way. Run these from the project
 directory (the one containing `docker-compose.prod.yml`), or pass `--dir`.
 
 ```bash
+serv-kun springboot init
+```
+
+Scaffolds that whole shape for a brand-new project: `docker-compose.prod.yml`,
+`nginx/templates/app.conf.template`, `nginx/conf.d/hardening.conf`,
+`scripts/backup-postgres.sh`, `.github/workflows/deploy.yml`, and a
+`DEPLOY.md` — parameterized by app name, the port the app listens on, max
+upload size, and whether to mount `certs/` for JWT keys. Doesn't require
+root (it only writes files); does require confirmation before overwriting
+anything that already exists, keeping a timestamped backup either way. You
+still need to add your own `Dockerfile` — that's build-specific enough per
+project that it isn't scaffolded.
+
+```bash
 sudo serv-kun springboot setup
 ```
 

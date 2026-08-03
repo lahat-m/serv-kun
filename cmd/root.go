@@ -21,6 +21,7 @@ Commands:
   postgres backup   Back up a PostgreSQL database to a file
   postgres restore  Restore a PostgreSQL database from a backup file
   node              Install Node.js via nvm and pick a default version
+  springboot init   Scaffold docker-compose.prod.yml, nginx config, backup script, and CI/CD
   springboot setup  Bootstrap docker, .env.prod, JWT keys, TLS, and bring the stack up
   springboot deploy Pull the latest app image and redeploy, with automatic rollback
   springboot status Show container status and check the app's health endpoint
@@ -40,7 +41,7 @@ func Execute(version string) {
 func init() {
 	nginxCmd.AddCommand(nginxSetupCmd, nginxSSLCmd)
 	postgresCmd.AddCommand(postgresSetupCmd, postgresBackupCmd, postgresRestoreCmd)
-	springbootCmd.AddCommand(springbootSetupCmd, springbootDeployCmd, springbootStatusCmd, springbootLogsCmd)
+	springbootCmd.AddCommand(springbootInitCmd, springbootSetupCmd, springbootDeployCmd, springbootStatusCmd, springbootLogsCmd)
 	rootCmd.AddCommand(nginxCmd, userCmd, postgresCmd, nodeCmd, springbootCmd)
 }
 
