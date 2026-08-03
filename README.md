@@ -12,7 +12,7 @@ config file editing required.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lahat-m/serv-kun/master/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/lahat-m/serv-kun/main/install.sh | sudo bash
 ```
 
 Or download a binary directly from [Releases](https://github.com/lahat-m/serv-kun/releases):
