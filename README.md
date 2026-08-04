@@ -130,7 +130,8 @@ sudo serv-kun user
 > so a key-only user can log in but gets `sudo: a password is required` and
 > can administer nothing. The key is for SSH; the password is for `sudo`. You
 > still get key-only *login* once step 5 disables password authentication,
-> because that setting governs SSH auth, not `sudo`.
+> because that setting governs SSH auth, not `sudo`. (`ssh harden` checks for
+> this in step 5 and refuses to run, but it's easier to get right here.)
 
 ### Step 4 — Verify access before hardening anything
 
@@ -217,24 +218,25 @@ sudo serv-kun springboot setup
 | Days to keep nightly backups | `7` | Raise it if your data changes slowly and disk allows. |
 | Allowed CORS origin(s) | `https://kuniel.com` | Defaults to `https://<domain>`. Add your frontend's origin if it's hosted separately. |
 | Does this app use RS256 JWT keys? | `Yes` | Match what you answered in step 7. |
-| → Path `certs/` is mounted at | `/etc/kuniel/certs` | **See the warning below — the default is usually wrong.** |
+| → Path `certs/` is mounted at | `/etc/kuniel/certs` | Defaulted by reading the `./certs` bind mount out of your compose file, so it should already be right — accept it unless you changed the mount by hand. |
 | Seed an initial admin account? | `Yes` | Only on a genuinely fresh database. |
 | → Seeded admin email / password / full name | `admin@kuniel.com` / *(generated)* / `Admin` | Change the password after first login. |
 | Does this app send email via Resend? | `No` | `Yes` needs an API key and a verified sender domain. |
 | Does this app use S3-compatible object storage? | `No` | `Yes` needs endpoint, access key, secret key, bucket, region. |
 | Proceed? | `Yes` | Review the summary — domain, image and DB name are the easy typos. |
 
-> **The certs mount path default doesn't match the scaffold.** The prompt
-> defaults to `/etc/app/certs`, but `springboot init` mounts `certs/` at
-> `/etc/<app-name>/certs`. For an app named `kuniel` the correct answer is
-> `/etc/kuniel/certs`. Getting this wrong writes `JWT_PRIVATE_KEY` pointing at
-> a path that doesn't exist in the container, and the app fails to start on a
-> missing key file. Check the `volumes:` line for `app` in your
-> `docker-compose.prod.yml` and use whatever it says on the right of the colon.
+> **If your JWT keys live in `certs/`, check the container can read them.**
+> The wizard writes `certs/` as `0700` and `private.pem` as `0600`, both owned
+> by root. If your `Dockerfile` sets a non-root `USER`, the app can see the key
+> and not open it, and dies at startup. `sudo chown -R <uid>:<gid> certs/`
+> using the container's UID fixes it; the wizard prints this reminder too.
 
-If DNS isn't resolving to this server yet you'll be asked whether to proceed
-anyway — answer `No`, fix DNS, and re-run. Certificate issuance cannot succeed
-until it resolves, and repeated failures hit Let's Encrypt rate limits.
+A **proxied Cloudflare record** (orange cloud) is recognised and reported as
+`→ Cloudflare edge (proxied)` rather than a failure — the HTTP-01 challenge
+still reaches the origin, so issuance works normally. If instead DNS genuinely
+doesn't resolve here, you'll be asked whether to proceed anyway: answer `No`,
+fix the record, and re-run. Certificate issuance can't succeed until it
+resolves, and repeated failures burn Let's Encrypt rate limits.
 
 ### Step 10 — Wire up continuous deployment
 
@@ -341,11 +343,14 @@ nothing.
 
 Before touching anything, it asks which user must keep access and refuses to
 proceed unless that user is a non-root account **and** has at least one key in
-`~/.ssh/authorized_keys` **and** is in the sudo/wheel group. All three matter:
-a user with keys but no sudo gets in with no way to administer the box. If the
-check fails you're told how to fix it (`sudo serv-kun user`) and can only
-continue via an explicit opt-in that defaults to no — for when you have
-console or rescue access and know what you're doing.
+`~/.ssh/authorized_keys` **and** can actually run `sudo`. That last check is
+stronger than group membership: an account created with only an SSH key sits
+in the sudo group with a locked password, and the default sudoers policy
+rejects every command it runs. So the check confirms either a usable password
+or a `NOPASSWD` sudoers rule — otherwise you'd be left able to log in and
+unable to administer anything. If it fails you're told how to fix it
+(`sudo serv-kun user`) and can only continue via an explicit opt-in that
+defaults to no, for when you have console or rescue access.
 
 #### Where it writes
 
