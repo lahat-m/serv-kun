@@ -233,6 +233,11 @@ func EnableLocalPasswordAuth(osInfo *system.Info) error {
 			"host    all             all             ::1/128                 %s\n\n",
 		method, method)
 
+	// Deliberately a plain in-place write, not system.AtomicWriteFile:
+	// pg_hba.conf is owned by postgres:postgres, and an atomic write renames a
+	// root-created temp file over it, leaving it root-owned. PostgreSQL would
+	// then be unable to read its own auth config and refuse to start.
+	// Truncating the existing inode keeps the ownership intact.
 	if err := os.WriteFile(path, append([]byte(header), data...), 0640); err != nil {
 		return fmt.Errorf("write pg_hba.conf: %w", err)
 	}

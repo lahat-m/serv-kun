@@ -282,7 +282,10 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 	}
 
 	// 0600: this file holds real secrets (DB password, JWT paths, API keys).
-	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
+	// Atomic because nothing validates .env.prod the way sshd -t validates
+	// sshd_config — a torn write here would surface as a confusing runtime
+	// failure rather than an obvious one.
+	if err := system.AtomicWriteFile(envPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("write %s: %w", proj.EnvFile, err)
 	}
 	fmt.Printf("✓ %s written\n\n", proj.EnvFile)

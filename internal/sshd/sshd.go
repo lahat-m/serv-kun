@@ -249,7 +249,9 @@ func backupFile(path string) (string, error) {
 	}
 
 	backup := path + ".bak." + time.Now().Format("20060102-150405")
-	if err := os.WriteFile(backup, data, 0600); err != nil {
+	// Atomic: a half-written backup is worse than none, since Restore would
+	// put the truncated copy back as the live config.
+	if err := system.AtomicWriteFile(backup, data, 0600); err != nil {
 		return "", fmt.Errorf("write backup: %w", err)
 	}
 	return backup, nil
@@ -277,7 +279,10 @@ func Apply(opts Options) (written, backup string, err error) {
 		if err != nil {
 			return "", "", err
 		}
-		if err := os.WriteFile(path, []byte(strings.Join(blockLines(ds), "\n")), 0644); err != nil {
+		// Atomic, so sshd can never observe a partially written drop-in. The
+		// temp file is named .tmp-*, which the Include glob (*.conf) ignores
+		// even if a crash leaves one behind.
+		if err := system.AtomicWriteFile(path, []byte(strings.Join(blockLines(ds), "\n")), 0644); err != nil {
 			return "", backup, fmt.Errorf("write %s: %w", path, err)
 		}
 		return path, backup, nil
@@ -291,7 +296,7 @@ func Apply(opts Options) (written, backup string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(ConfigPath, []byte(rewriteConfig(string(data), ds)), 0644); err != nil {
+	if err := system.AtomicWriteFile(ConfigPath, []byte(rewriteConfig(string(data), ds)), 0644); err != nil {
 		return "", backup, fmt.Errorf("write %s: %w", ConfigPath, err)
 	}
 	return ConfigPath, backup, nil
@@ -311,7 +316,7 @@ func Restore(path, backup string) error {
 	if err != nil {
 		return fmt.Errorf("read backup %s: %w", backup, err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := system.AtomicWriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("restore %s: %w", path, err)
 	}
 	return nil
