@@ -36,6 +36,31 @@ func GrantSudo(username string, osInfo *system.Info) error {
 	return system.RunCmd("usermod", "-aG", SudoGroup(osInfo), username)
 }
 
+// HasSudo reports whether username is already in the OS's sudo/wheel group.
+func HasSudo(username string, osInfo *system.Info) (bool, error) {
+	u, err := user.Lookup(username)
+	if err != nil {
+		return false, fmt.Errorf("lookup user %q: %w", username, err)
+	}
+
+	group, err := user.LookupGroup(SudoGroup(osInfo))
+	if err != nil {
+		return false, fmt.Errorf("lookup group %q: %w", SudoGroup(osInfo), err)
+	}
+
+	// GroupIds covers the primary group too, not just supplementary ones.
+	gids, err := u.GroupIds()
+	if err != nil {
+		return false, fmt.Errorf("list groups for %q: %w", username, err)
+	}
+	for _, gid := range gids {
+		if gid == group.Gid {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // SetPassword sets the Unix login password for username via chpasswd.
 func SetPassword(username, password string) error {
 	cmd := exec.Command("chpasswd")
