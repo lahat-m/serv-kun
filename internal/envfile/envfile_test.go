@@ -45,18 +45,20 @@ func TestGenerateContainsAllFieldsWhenEnabled(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 
+	// Values are double-quoted so Compose doesn't interpolate them — see
+	// quoteValue.
 	for _, want := range []string{
-		"APP_DOMAIN=example.com",
-		"CERTBOT_EMAIL=admin@example.com",
-		"APP_IMAGE=ghcr.io/org/app:latest",
-		"POSTGRES_DB=app",
-		"SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/app",
-		"APP_CORS_ALLOWED_ORIGINS=https://example.com",
-		"JWT_PUBLIC_KEY=file:/etc/app/certs/public.pem",
-		"JWT_PRIVATE_KEY=file:/etc/app/certs/private.pem",
-		"APP_ADMIN_EMAIL=root@example.com",
-		"RESEND_API_KEY=re_xxx",
-		"APP_S3_BUCKET=app-documents",
+		`APP_DOMAIN="example.com"`,
+		`CERTBOT_EMAIL="admin@example.com"`,
+		`APP_IMAGE="ghcr.io/org/app:latest"`,
+		`POSTGRES_DB="app"`,
+		`SPRING_DATASOURCE_URL="jdbc:postgresql://postgres:5432/app"`,
+		`APP_CORS_ALLOWED_ORIGINS="https://example.com"`,
+		`JWT_PUBLIC_KEY="file:/etc/app/certs/public.pem"`,
+		`JWT_PRIVATE_KEY="file:/etc/app/certs/private.pem"`,
+		`APP_ADMIN_EMAIL="root@example.com"`,
+		`RESEND_API_KEY="re_xxx"`,
+		`APP_S3_BUCKET="app-documents"`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("Generate() output missing %q\n---\n%s", want, content)
@@ -88,7 +90,7 @@ func TestGenerateOmitsDisabledSections(t *testing.T) {
 	}
 
 	// The always-present fields must still be there.
-	for _, want := range []string{"APP_DOMAIN=example.com", "POSTGRES_DB=app", "APP_CORS_ALLOWED_ORIGINS=https://example.com"} {
+	for _, want := range []string{`APP_DOMAIN="example.com"`, `POSTGRES_DB="app"`, `APP_CORS_ALLOWED_ORIGINS="https://example.com"`} {
 		if !strings.Contains(content, want) {
 			t.Errorf("Generate() output missing always-present field %q\n---\n%s", want, content)
 		}
@@ -139,6 +141,103 @@ func TestReadIgnoresCommentsAndBlankLines(t *testing.T) {
 	}
 	if kv["OTHER"] != "spaced" {
 		t.Errorf("OTHER = %q, want %q", kv["OTHER"], "spaced")
+	}
+}
+
+// An unquoted "abc$def" is interpolated by Compose down to "abc" — silently
+// weakening a password instead of failing. Quoting plus $-escaping is what
+// prevents that, so pin it.
+func TestGenerateEscapesDollarInSecrets(t *testing.T) {
+	a := testAnswers()
+	a.PostgresPassword = "abc$def123"
+
+	content, err := Generate(a)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	if !strings.Contains(content, `POSTGRES_PASSWORD="abc$$def123"`) {
+		t.Errorf("$ not escaped in generated output\n---\n%s", content)
+	}
+	if strings.Contains(content, `POSTGRES_PASSWORD="abc$def123"`) {
+		t.Errorf("generated a bare $ that Compose would interpolate\n---\n%s", content)
+	}
+}
+
+func TestQuoteValueEscaping(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`plain`, `"plain"`},
+		{`abc$def`, `"abc$$def"`},
+		{`say "hi"`, `"say \"hi\""`},
+		{`back\slash`, `"back\\slash"`},
+		{`a b#c`, `"a b#c"`},
+		// Backslashes must be escaped before quotes, or the escape we add
+		// for the quote would itself get escaped.
+		{`mix\"$`, `"mix\\\"$$"`},
+	}
+	for _, c := range cases {
+		if got := quoteValue(c.in); got != c.want {
+			t.Errorf("quoteValue(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// Whatever Generate writes, Read must give back the original value.
+func TestValueRoundTripThroughFile(t *testing.T) {
+	secrets := []string{
+		`abc$def123`,
+		`say "hi"`,
+		`back\slash`,
+		`a b#c$d"e`,
+		`$$already`,
+		`trailing$`,
+	}
+
+	for _, secret := range secrets {
+		a := testAnswers()
+		a.PostgresPassword = secret
+
+		content, err := Generate(a)
+		if err != nil {
+			t.Fatalf("Generate(%q): %v", secret, err)
+		}
+
+		path := filepath.Join(t.TempDir(), ".env.prod")
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		kv, err := Read(path)
+		if err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		if kv["POSTGRES_PASSWORD"] != secret {
+			t.Errorf("round trip of %q gave %q", secret, kv["POSTGRES_PASSWORD"])
+		}
+	}
+}
+
+// A hand-edited file may quote values too; Read shouldn't hand back the quotes.
+func TestReadStripsQuotesFromHandEditedValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env.prod")
+	body := "APP_DOMAIN=\"example.com\"\nAPP_IMAGE='ghcr.io/org/app:latest'\nBARE=plain\n"
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	kv, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	for key, want := range map[string]string{
+		"APP_DOMAIN": "example.com",
+		"APP_IMAGE":  "ghcr.io/org/app:latest",
+		"BARE":       "plain",
+	} {
+		if kv[key] != want {
+			t.Errorf("%s = %q, want %q", key, kv[key], want)
+		}
 	}
 }
 

@@ -11,6 +11,14 @@ const BackupScript = `#!/bin/sh
 # itself, not just app-level mistakes.
 set -eu
 
+# Without pipefail, "pg_dump | gzip" reports gzip's exit status — so a failed
+# dump still looks successful and leaves behind a valid, empty .gz. BusyBox
+# ash (this image's /bin/sh) and bash both support it; the guard keeps the
+# script working on a shell that doesn't.
+if (set -o pipefail) 2>/dev/null; then
+  set -o pipefail
+fi
+
 BACKUP_DIR=/backups
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-7}"
 
@@ -19,17 +27,33 @@ mkdir -p "$BACKUP_DIR"
 while true; do
   timestamp=$(date +%Y%m%d_%H%M%S)
   file="$BACKUP_DIR/${POSTGRES_DB}_${timestamp}.sql.gz"
+  backup_ok=0
 
   echo "[$(date -Iseconds)] backing up $POSTGRES_DB to $file"
-  if PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-      | gzip > "$file"; then
-    echo "[$(date -Iseconds)] backup ok"
+  if PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean --if-exists --no-owner \
+       -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" | gzip > "$file"; then
+    # Verify the archive independently of exit codes: even a dump of an empty
+    # database writes SQL headers, so zero decompressed bytes always means
+    # something went wrong.
+    if gzip -t "$file" 2>/dev/null && [ "$(gzip -dc "$file" 2>/dev/null | wc -c)" -gt 0 ]; then
+      backup_ok=1
+      echo "[$(date -Iseconds)] backup ok ($(wc -c < "$file") bytes)"
+    else
+      echo "[$(date -Iseconds)] backup FAILED verification — discarding" >&2
+      rm -f "$file"
+    fi
   else
     echo "[$(date -Iseconds)] backup FAILED" >&2
     rm -f "$file"
   fi
 
-  find "$BACKUP_DIR" -name '*.sql.gz' -mtime "+$KEEP_DAYS" -delete
+  # Only prune after a good dump. Otherwise a run of failures would quietly
+  # age out the last known-good backup and leave nothing behind.
+  if [ "$backup_ok" -eq 1 ]; then
+    find "$BACKUP_DIR" -name '*.sql.gz' -mtime "+$KEEP_DAYS" -delete
+  else
+    echo "[$(date -Iseconds)] skipping prune — keeping older backups" >&2
+  fi
 
   sleep 86400
 done

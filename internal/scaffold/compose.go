@@ -95,6 +95,13 @@ services:
       - "443:443"
     environment:
       APP_DOMAIN: ${APP_DOMAIN}
+    # nginx reads certificates into memory at startup, so certbot renewing
+    # them on disk is not enough on its own — without this reload loop nginx
+    # would keep serving the old certificate until it expired, roughly 90
+    # days after the first deploy. The official entrypoint still runs first
+    # (it renders the envsubst templates), then execs this.
+    command: >
+      /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g 'daemon off;'"
     volumes:
       - ./nginx/templates:/etc/nginx/templates:ro
       - ./nginx/conf.d/hardening.conf:/etc/nginx/conf.d/hardening.conf:ro
