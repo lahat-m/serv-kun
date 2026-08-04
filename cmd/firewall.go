@@ -61,8 +61,23 @@ func runFirewall(cmd *cobra.Command, _ []string) error {
 	// ── build the allow-list ───────────────────────────────────────────────
 	// Read the real SSH port rather than assuming 22 — locking yourself out
 	// of a server running sshd on a custom port is the classic way to lose it.
-	sshPort := sshd.Port()
-	fmt.Printf("SSH is listening on port %s — it will be allowed.\n\n", sshPort)
+	sshPort, detected := sshd.Port()
+	if detected {
+		fmt.Printf("SSH is listening on port %s — it will be allowed.\n\n", sshPort)
+	} else {
+		// Don't quietly present the fallback as fact: if sshd is elsewhere,
+		// allowing 22 and then enabling default-deny cuts off this session.
+		fmt.Printf("⚠  Could not read the SSH port from sshd — assuming %s.\n", sshPort)
+		fmt.Println("   Allowing the wrong port here would end your session when the firewall comes up.")
+		if err := survey.AskOne(&survey.Input{
+			Message: "SSH port to allow:",
+			Default: sshPort,
+			Help:    "check with: ss -tlnp | grep sshd",
+		}, &sshPort, survey.WithValidator(validatePort)); err != nil {
+			return err
+		}
+		fmt.Println()
+	}
 
 	rules := firewallpkg.DefaultRules(sshPort)
 
@@ -70,7 +85,7 @@ func runFirewall(cmd *cobra.Command, _ []string) error {
 	if err := survey.AskOne(&survey.Input{
 		Message: "Additional TCP ports to open (space-separated, blank for none):",
 		Help:    "e.g. 8080 3000 — Postgres and other internal services should stay closed",
-	}, &extra); err != nil {
+	}, &extra, survey.WithValidator(validateOptionalPortList)); err != nil {
 		return err
 	}
 	for _, p := range strings.Fields(extra) {

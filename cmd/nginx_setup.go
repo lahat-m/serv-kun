@@ -78,9 +78,9 @@ func runNginxSetup(cmd *cobra.Command, _ []string) error {
 			Name: "domains",
 			Prompt: &survey.Input{
 				Message: "Domain(s):",
-				Help:    "Space-separated — e.g. example.com www.example.com",
+				Help:    "Space-separated — e.g. example.com www.example.com, or an IP for a proxy without TLS",
 			},
-			Validate: validateDomainList,
+			Validate: validateServerNameList,
 		},
 		{
 			Name: "maxBodySize",
@@ -145,6 +145,17 @@ func runNginxSetup(cmd *cobra.Command, _ []string) error {
 	fmt.Println()
 
 	// ── optional SSL ───────────────────────────────────────────────────────
+	// server_name accepts IPs and dotless hosts, but Let's Encrypt only issues
+	// for public domain names — so don't offer SSL where certbot is certain to
+	// fail. Better to say why than to let it error out mid-issuance.
+	for _, d := range domains {
+		if err := checkDomain(d); err != nil {
+			fmt.Printf("\nDone. Skipping SSL: %s\n", err)
+			fmt.Println("Let's Encrypt only issues certificates for public domain names.")
+			return nil
+		}
+	}
+
 	var doSSL bool
 	if err := survey.AskOne(&survey.Confirm{
 		Message: "Set up SSL with Let's Encrypt now?",

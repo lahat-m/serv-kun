@@ -390,11 +390,24 @@ applying.
 The SSH port is read from the running sshd config rather than assumed to be
 `22`, and rules are added *before* default-deny takes effect — enabling a
 firewall that doesn't allow the port you're connected on is the classic way to
-lose a server.
+lose a server. If the port can't be read, you're told so and asked to confirm
+it rather than being shown a guess presented as fact.
 
 Database ports are deliberately not opened. In the `springboot` stack Postgres
 is never published to the host, so it needs no rule; if you do run Postgres
 directly on the host, prefer an SSH tunnel over exposing `5432`.
+
+> **ufw does not filter Docker-published ports.** Docker installs its own
+> iptables rules, and traffic to a published container port is forwarded
+> before it reaches the `INPUT` chain where ufw's default-deny applies. A
+> container run with `-p 5432:5432` is therefore reachable from the internet
+> even while `ufw status` reports `Default: deny (incoming)`.
+>
+> The `springboot` stack is unaffected: it publishes only 80 and 443, which
+> are allowed anyway, and Postgres is never published. But don't read
+> "default-deny" as covering containers. Bind anything not meant to be public
+> to localhost — `ports: ["127.0.0.1:5432:5432"]` — rather than relying on the
+> firewall to hide it.
 
 ### postgres — install PostgreSQL + a deployment role/database
 

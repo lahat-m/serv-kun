@@ -92,17 +92,22 @@ func EffectiveSettings() (map[string]string, error) {
 	return m, sc.Err()
 }
 
-// Port returns the port sshd actually listens on, so the firewall opens the
-// right one. Falls back to 22 if the config can't be read.
-func Port() string {
+// Port returns the port sshd listens on, and whether that was genuinely read
+// from the running config.
+//
+// A false second return means "22" is only a guess. Callers building firewall
+// rules must not present it as fact: allowing the wrong port and then enabling
+// default-deny drops the operator's session, which is the exact failure the
+// firewall wizard exists to avoid.
+func Port() (port string, detected bool) {
 	settings, err := EffectiveSettings()
 	if err != nil {
-		return "22"
+		return "22", false
 	}
 	if p := settings["port"]; p != "" {
-		return p
+		return p, true
 	}
-	return "22"
+	return "22", false
 }
 
 // Test runs `sshd -t`, sshd's own config validation.
@@ -250,8 +255,9 @@ func backupFile(path string) (string, error) {
 
 	backup := path + ".bak." + time.Now().Format("20060102-150405")
 	// Atomic: a half-written backup is worse than none, since Restore would
-	// put the truncated copy back as the live config.
-	if err := system.AtomicWriteFile(backup, data, 0600); err != nil {
+	// put the truncated copy back as the live config. The backup carries the
+	// original's mode so Restore can put the file back exactly as it was.
+	if err := system.AtomicWriteFile(backup, data, system.ModeOrDefault(path, 0600)); err != nil {
 		return "", fmt.Errorf("write backup: %w", err)
 	}
 	return backup, nil
@@ -282,7 +288,8 @@ func Apply(opts Options) (written, backup string, err error) {
 		// Atomic, so sshd can never observe a partially written drop-in. The
 		// temp file is named .tmp-*, which the Include glob (*.conf) ignores
 		// even if a crash leaves one behind.
-		if err := system.AtomicWriteFile(path, []byte(strings.Join(blockLines(ds), "\n")), 0644); err != nil {
+		if err := system.AtomicWriteFile(path, []byte(strings.Join(blockLines(ds), "\n")),
+			system.ModeOrDefault(path, 0644)); err != nil {
 			return "", backup, fmt.Errorf("write %s: %w", path, err)
 		}
 		return path, backup, nil
@@ -296,7 +303,9 @@ func Apply(opts Options) (written, backup string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	if err := system.AtomicWriteFile(ConfigPath, []byte(rewriteConfig(string(data), ds)), 0644); err != nil {
+	// Preserve the existing mode — hardening must never loosen it.
+	if err := system.AtomicWriteFile(ConfigPath, []byte(rewriteConfig(string(data), ds)),
+		system.ModeOrDefault(ConfigPath, 0644)); err != nil {
 		return "", backup, fmt.Errorf("write %s: %w", ConfigPath, err)
 	}
 	return ConfigPath, backup, nil
@@ -316,7 +325,9 @@ func Restore(path, backup string) error {
 	if err != nil {
 		return fmt.Errorf("read backup %s: %w", backup, err)
 	}
-	if err := system.AtomicWriteFile(path, data, 0644); err != nil {
+	// The backup carries the original's mode, so restoring from it returns the
+	// permissions as well as the contents.
+	if err := system.AtomicWriteFile(path, data, system.ModeOrDefault(backup, 0644)); err != nil {
 		return fmt.Errorf("restore %s: %w", path, err)
 	}
 	return nil

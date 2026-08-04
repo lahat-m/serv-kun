@@ -32,12 +32,13 @@ while true; do
   echo "[$(date -Iseconds)] backing up $POSTGRES_DB to $file"
   if PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean --if-exists --no-owner \
        -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" | gzip > "$file"; then
-    # Verify the archive independently of exit codes: even a dump of an empty
-    # database writes SQL headers, so zero decompressed bytes always means
-    # something went wrong.
-    if gzip -t "$file" 2>/dev/null && [ "$(gzip -dc "$file" 2>/dev/null | wc -c)" -gt 0 ]; then
+    # Verify the archive in a single pass: under pipefail a corrupt archive
+    # fails the pipeline, and a zero byte count catches a dump that produced
+    # nothing (even an empty database writes SQL headers). A separate gzip -t
+    # would decompress the whole file a second time for no extra signal.
+    if bytes=$(gzip -dc "$file" | wc -c) && [ "$bytes" -gt 0 ]; then
       backup_ok=1
-      echo "[$(date -Iseconds)] backup ok ($(wc -c < "$file") bytes)"
+      echo "[$(date -Iseconds)] backup ok ($(wc -c < "$file") bytes compressed, $bytes uncompressed)"
     else
       echo "[$(date -Iseconds)] backup FAILED verification — discarding" >&2
       rm -f "$file"

@@ -128,7 +128,7 @@ func BackupFile(path string) (string, error) {
 	}
 
 	backup := path + ".bak." + time.Now().Format("20060102-150405")
-	if err := system.AtomicWriteFile(backup, data, 0644); err != nil {
+	if err := system.AtomicWriteFile(backup, data, system.ModeOrDefault(path, 0644)); err != nil {
 		return "", fmt.Errorf("write backup: %w", err)
 	}
 	return backup, nil
@@ -147,8 +147,9 @@ func WriteConfig(cfg Config, content string) error {
 		fmt.Printf("  Backed up existing config → %s\n", backup)
 	}
 
-	// Atomic, so a reload can never pick up a half-written server block.
-	if err := system.AtomicWriteFile(path, []byte(content), 0644); err != nil {
+	// Atomic, so a reload can never pick up a half-written server block, and
+	// mode-preserving, so rewriting a config never changes its permissions.
+	if err := system.AtomicWriteFile(path, []byte(content), system.ModeOrDefault(path, 0644)); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	fmt.Printf("  Config written → %s\n", path)
