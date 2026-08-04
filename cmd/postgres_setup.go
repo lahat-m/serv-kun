@@ -84,11 +84,37 @@ func runPostgresSetup(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	fmt.Printf("\nCreating role %q...\n", answers.Role)
-	if err := pgpkg.CreateRole(answers.Role, answers.Password); err != nil {
-		return fmt.Errorf("create role: %w", err)
+	exists, err := pgpkg.RoleExists(answers.Role)
+	if err != nil {
+		return fmt.Errorf("check role: %w", err)
 	}
-	fmt.Println("✓ Role ready")
+
+	if exists {
+		// Silently keeping the old password here would be worse than asking:
+		// setup would report success and then print a connection string using
+		// a password the server doesn't have.
+		var reset bool
+		if err := survey.AskOne(&survey.Confirm{
+			Message: fmt.Sprintf("Role %q already exists. Reset its password to what you just entered?", answers.Role),
+			Default: true,
+		}, &reset); err != nil {
+			return err
+		}
+		if reset {
+			if err := pgpkg.SetRolePassword(answers.Role, answers.Password); err != nil {
+				return fmt.Errorf("set role password: %w", err)
+			}
+			fmt.Println("✓ Role password updated")
+		} else {
+			fmt.Println("• Left the existing password unchanged")
+		}
+	} else {
+		fmt.Printf("\nCreating role %q...\n", answers.Role)
+		if err := pgpkg.CreateRole(answers.Role, answers.Password); err != nil {
+			return fmt.Errorf("create role: %w", err)
+		}
+		fmt.Println("✓ Role created")
+	}
 
 	fmt.Printf("Creating database %q...\n", answers.Database)
 	if err := pgpkg.CreateDatabase(answers.Database, answers.Role); err != nil {

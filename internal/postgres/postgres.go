@@ -55,12 +55,34 @@ func Restart() error {
 	return system.RunCmd("systemctl", "restart", "postgresql")
 }
 
-// CreateRole creates a LOGIN role with the given password if it doesn't already exist.
+// RoleExists reports whether a login role of this name is already present.
+func RoleExists(name string) (bool, error) {
+	out, err := runToolAsPostgres("psql", "-tAc",
+		fmt.Sprintf("SELECT 1 FROM pg_roles WHERE rolname = %s", quoteLiteral(name)))
+	if err != nil {
+		return false, fmt.Errorf("%w\n%s", err, out)
+	}
+	return strings.TrimSpace(out) == "1", nil
+}
+
+// CreateRole creates a LOGIN role with the given password.
 func CreateRole(name, password string) error {
-	sql := fmt.Sprintf(
-		"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = %s) THEN CREATE ROLE %s LOGIN PASSWORD %s; END IF; END $$;",
-		quoteLiteral(name), quoteIdent(name), quoteLiteral(password),
-	)
+	sql := fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD %s;",
+		quoteIdent(name), quoteLiteral(password))
+	out, err := runToolAsPostgres("psql", "-v", "ON_ERROR_STOP=1", "-c", sql)
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, out)
+	}
+	return nil
+}
+
+// SetRolePassword resets an existing role's password. Callers need this
+// because CreateRole can't: re-running setup against a role that already
+// exists used to discard the password that was just typed, while still
+// reporting success and printing a connection string that wouldn't work.
+func SetRolePassword(name, password string) error {
+	sql := fmt.Sprintf("ALTER ROLE %s WITH LOGIN PASSWORD %s;",
+		quoteIdent(name), quoteLiteral(password))
 	out, err := runToolAsPostgres("psql", "-v", "ON_ERROR_STOP=1", "-c", sql)
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, out)
@@ -204,14 +226,29 @@ func EnableLocalPasswordAuth(osInfo *system.Info) error {
 		return fmt.Errorf("backup pg_hba.conf: %w", err)
 	}
 
-	header := "# added by serv-kun — force password auth for local TCP connections\n" +
-		"host    all             all             127.0.0.1/32            md5\n" +
-		"host    all             all             ::1/128                 md5\n\n"
+	method := passwordAuthMethod()
+	header := fmt.Sprintf(
+		"# added by serv-kun — force password auth for local TCP connections\n"+
+			"host    all             all             127.0.0.1/32            %s\n"+
+			"host    all             all             ::1/128                 %s\n\n",
+		method, method)
 
 	if err := os.WriteFile(path, append([]byte(header), data...), 0640); err != nil {
 		return fmt.Errorf("write pg_hba.conf: %w", err)
 	}
 	return nil
+}
+
+// passwordAuthMethod picks the pg_hba method matching how this server
+// actually stores passwords. Writing scram-sha-256 against a server still on
+// md5 storage (PostgreSQL 13 and older, as shipped by RHEL 9) locks the role
+// out, so the server's own setting decides rather than a hardcoded guess.
+func passwordAuthMethod() string {
+	out, err := runToolAsPostgres("psql", "-tAc", "SHOW password_encryption;")
+	if err == nil && strings.TrimSpace(out) == "scram-sha-256" {
+		return "scram-sha-256"
+	}
+	return "md5"
 }
 
 func hbaPath(osInfo *system.Info) (string, error) {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	survey "github.com/AlecAivazis/survey/v2"
@@ -26,6 +28,28 @@ const (
 	setupHealthTimeout  = 120 * time.Second
 	setupHealthInterval = 3 * time.Second
 )
+
+// certsMountRe pulls the container-side path out of the app service's
+// "./certs:/somewhere:ro" bind mount.
+var certsMountRe = regexp.MustCompile(`\./certs:([^:\s]+)`)
+
+// defaultCertsMount reads that path out of the compose file so the prompt's
+// default matches what `springboot init` actually wrote. The old hardcoded
+// /etc/app/certs was correct only for a project literally named "app";
+// anywhere else it pointed JWT_PRIVATE_KEY at a path that doesn't exist in
+// the container, and the app failed to start on a missing key file.
+func defaultCertsMount(composePath string) string {
+	const fallback = "/etc/app/certs"
+
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return fallback
+	}
+	if m := certsMountRe.FindSubmatch(data); m != nil {
+		return string(m[1])
+	}
+	return fallback
+}
 
 func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 	requireRoot(cmd)
@@ -73,7 +97,7 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 		{
 			Name:     "appDomain",
 			Prompt:   &survey.Input{Message: "Domain this app will be served on:", Help: "e.g. kuniel.com"},
-			Validate: survey.Required,
+			Validate: validateDomain,
 		},
 		{
 			Name:     "certbotEmail",
@@ -88,6 +112,9 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 	}, &basics); err != nil {
 		return err
 	}
+	// survey stores the raw input; the validator only inspected the trimmed
+	// form, so normalize before this flows into paths and container args.
+	basics.AppDomain = strings.TrimSpace(basics.AppDomain)
 	fmt.Println()
 
 	// ── always required: Postgres + CORS ────────────────────────────────────
@@ -126,7 +153,8 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 		answers.HasJWT = true
 		return survey.AskOne(&survey.Input{
 			Message: "Path certs/ is mounted at inside the app container:",
-			Default: "/etc/app/certs",
+			Default: defaultCertsMount(composePath),
+			Help:    "must match the app service's ./certs bind mount in the compose file",
 		}, &answers.CertsMountPath, survey.WithValidator(survey.Required))
 	}); err != nil {
 		return err
@@ -271,6 +299,11 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 			}
 			fmt.Println("✓ JWT keypair generated → certs/")
 		}
+		// certs/ is 0700 and private.pem 0600, both root-owned. If the image's
+		// Dockerfile sets a non-root USER, the app cannot read its own signing
+		// key and dies at startup on a file it can see but not open.
+		fmt.Println("  Note: keys are root-only. If your Dockerfile sets a non-root USER,")
+		fmt.Println("  grant that UID read access, e.g.  sudo chown -R <uid>:<gid> certs/")
 		fmt.Println()
 	}
 
@@ -284,9 +317,12 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 
 	results := dns.CheckDomains([]string{basics.AppDomain}, serverIP)
 	for _, r := range results {
-		if r.OK {
+		switch {
+		case r.Proxied:
+			fmt.Printf("  ✓ %s → Cloudflare edge (proxied — challenge still reaches this server)\n", r.Domain)
+		case r.OK:
 			fmt.Printf("  ✓ %s → %s\n", r.Domain, r.MatchedIP)
-		} else {
+		default:
 			fmt.Printf("  ✗ %s → %v (%s)\n", r.Domain, r.ResolvedIPs, r.Err)
 		}
 	}

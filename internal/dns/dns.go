@@ -11,6 +11,7 @@ type Result struct {
 	ResolvedIPs []string
 	MatchedIP   string
 	OK          bool
+	Proxied     bool // resolves to Cloudflare's edge rather than the origin
 	Err         error
 }
 
@@ -50,6 +51,17 @@ func checkDomain(domain, serverIP string) Result {
 			r.MatchedIP = ip
 			return r
 		}
+	}
+
+	// A proxied Cloudflare record resolves to Cloudflare's edge, never the
+	// origin, so an IP mismatch here is expected rather than a misconfigured
+	// record — and the HTTP-01 challenge still reaches us, because Cloudflare
+	// forwards port 80 to the origin. Treating this as failure is what made
+	// the old check cry wolf on the exact setup DEPLOY.md recommends.
+	if allCloudflare(ips) {
+		r.OK = true
+		r.Proxied = true
+		return r
 	}
 
 	r.Err = fmt.Errorf("resolves to %v, server IP is %s", ips, serverIP)

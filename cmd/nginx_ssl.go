@@ -54,7 +54,7 @@ func runNginxSSL(cmd *cobra.Command, _ []string) error {
 				Message: "Domain(s) to certify:",
 				Help:    "Space-separated — must match the server_name in your config",
 			},
-			Validate: survey.Required,
+			Validate: validateDomainList,
 		},
 	}
 
@@ -99,7 +99,8 @@ func runNginxSSL(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	return runSSLSetup(domains, osInfo)
+	// DNS was already resolved and reported above.
+	return runSSLSetup(domains, osInfo, false)
 }
 
 // printDNSResults prints a check/cross for each domain and returns the results.
@@ -107,9 +108,12 @@ func printDNSResults(domains []string, serverIP string) []dnspkg.Result {
 	results := dnspkg.CheckDomains(domains, serverIP)
 	fmt.Println("DNS check:")
 	for _, r := range results {
-		if r.OK {
+		switch {
+		case r.Proxied:
+			fmt.Printf("  ✓ %-40s → Cloudflare edge (proxied — challenge still reaches this server)\n", r.Domain)
+		case r.OK:
 			fmt.Printf("  ✓ %-40s → %s\n", r.Domain, r.MatchedIP)
-		} else if r.Err != nil {
+		case r.Err != nil:
 			fmt.Printf("  ✗ %-40s — %s\n", r.Domain, r.Err)
 		}
 	}

@@ -80,7 +80,7 @@ func runNginxSetup(cmd *cobra.Command, _ []string) error {
 				Message: "Domain(s):",
 				Help:    "Space-separated — e.g. example.com www.example.com",
 			},
-			Validate: survey.Required,
+			Validate: validateDomainList,
 		},
 		{
 			Name: "maxBodySize",
@@ -158,21 +158,25 @@ func runNginxSetup(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	return runSSLSetup(domains, osInfo)
+	return runSSLSetup(domains, osInfo, true)
 }
 
-// runSSLSetup is shared by the nginx setup and nginx ssl commands.
-func runSSLSetup(domains []string, osInfo *system.Info) error {
+// runSSLSetup is shared by the nginx setup and nginx ssl commands. Pass
+// checkDNS=false when the caller has already resolved and reported DNS, so
+// the operator isn't shown the same check twice.
+func runSSLSetup(domains []string, osInfo *system.Info, checkDNS bool) error {
 	printBanner("SSL setup")
 
-	fmt.Println("Resolving server public IP...")
-	serverIP, err := system.GetPublicIP()
-	if err != nil {
-		return fmt.Errorf("could not determine server public IP: %w", err)
-	}
-	fmt.Printf("Server IP: %s\n\n", serverIP)
+	if checkDNS {
+		fmt.Println("Resolving server public IP...")
+		serverIP, err := system.GetPublicIP()
+		if err != nil {
+			return fmt.Errorf("could not determine server public IP: %w", err)
+		}
+		fmt.Printf("Server IP: %s\n\n", serverIP)
 
-	printDNSResults(domains, serverIP)
+		printDNSResults(domains, serverIP)
+	}
 
 	// ── certbot install ────────────────────────────────────────────────────
 	if !certbot.IsInstalled() {

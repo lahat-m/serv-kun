@@ -14,14 +14,18 @@ import (
 func bootstrapTLS(proj compose.Project, domain, email string) error {
 	fmt.Println("\nBootstrapping TLS certificate...")
 
-	dummyScript := fmt.Sprintf(
-		"mkdir -p /etc/letsencrypt/live/%s && "+
-			"openssl req -x509 -nodes -newkey rsa:2048 -days 1 "+
-			"-keyout /etc/letsencrypt/live/%s/privkey.pem "+
-			"-out /etc/letsencrypt/live/%s/fullchain.pem -subj '/CN=localhost'",
-		domain, domain, domain,
-	)
-	if err := proj.Run("run", "--rm", "--entrypoint", "sh", "certbot", "-c", dummyScript); err != nil {
+	// The domain is passed as a positional argument rather than interpolated
+	// into the script text, so it can never word-split or be read as shell
+	// syntax. That matters most for the rm below: a domain with a stray space
+	// would otherwise expand into extra operands and wipe every certificate
+	// on the host.
+	const dummyScript = `set -e
+mkdir -p "/etc/letsencrypt/live/$1"
+openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+  -keyout "/etc/letsencrypt/live/$1/privkey.pem" \
+  -out "/etc/letsencrypt/live/$1/fullchain.pem" -subj '/CN=localhost'`
+
+	if err := proj.Run("run", "--rm", "--entrypoint", "sh", "certbot", "-c", dummyScript, "sh", domain); err != nil {
 		return fmt.Errorf("create dummy certificate: %w", err)
 	}
 
@@ -29,11 +33,10 @@ func bootstrapTLS(proj compose.Project, domain, email string) error {
 		return fmt.Errorf("start nginx: %w", err)
 	}
 
-	cleanupScript := fmt.Sprintf(
-		"rm -rf /etc/letsencrypt/live/%s /etc/letsencrypt/archive/%s /etc/letsencrypt/renewal/%s.conf",
-		domain, domain, domain,
-	)
-	if err := proj.Run("run", "--rm", "--entrypoint", "sh", "certbot", "-c", cleanupScript); err != nil {
+	const cleanupScript = `set -e
+rm -rf "/etc/letsencrypt/live/$1" "/etc/letsencrypt/archive/$1" "/etc/letsencrypt/renewal/$1.conf"`
+
+	if err := proj.Run("run", "--rm", "--entrypoint", "sh", "certbot", "-c", cleanupScript, "sh", domain); err != nil {
 		return fmt.Errorf("remove dummy certificate: %w", err)
 	}
 
