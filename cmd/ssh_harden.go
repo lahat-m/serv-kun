@@ -189,15 +189,11 @@ func checkLockoutSafety(username string, osInfo *system.Info) (bool, string) {
 		return false, fmt.Sprintf("User %q has no SSH keys in ~/.ssh/authorized_keys.", username)
 	}
 
-	hasSudo, err := sudouser.HasSudo(username, osInfo)
-	if err != nil {
-		return false, fmt.Sprintf("Could not check sudo rights for %q: %v", username, err)
-	}
-	if !hasSudo {
-		return false, fmt.Sprintf("User %q has SSH keys but is not in the %q group — you'd get in with no way to run sudo.",
-			username, sudouser.SudoGroup(osInfo))
+	canSudo, reason := sudouser.CanSudo(username, osInfo)
+	if !canSudo {
+		return false, fmt.Sprintf("User %q has SSH keys but cannot run sudo — %s. You'd get in with no way to administer the server.",
+			username, reason)
 	}
 
-	return true, fmt.Sprintf("User %q has %d SSH key(s) and is in the %q group.",
-		username, len(keys), sudouser.SudoGroup(osInfo))
+	return true, fmt.Sprintf("User %q has %d SSH key(s) and is %s.", username, len(keys), reason)
 }

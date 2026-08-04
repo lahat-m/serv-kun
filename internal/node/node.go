@@ -101,8 +101,21 @@ func LinkSystemBinaries(username string) error {
 		if _, err := os.Stat(src); err != nil {
 			continue
 		}
+
 		dst := filepath.Join("/usr/local/bin", name)
-		os.Remove(dst)
+		// Lstat, not Stat: only replace our own symlinks. A real binary here
+		// came from somewhere else (a distro package, a manual install), and
+		// silently deleting it would be destroying something we didn't create.
+		if fi, err := os.Lstat(dst); err == nil {
+			if fi.Mode()&os.ModeSymlink == 0 {
+				fmt.Printf("  skipped %s — %s exists and is not a symlink\n", name, dst)
+				continue
+			}
+			if err := os.Remove(dst); err != nil {
+				return fmt.Errorf("replace %s: %w", dst, err)
+			}
+		}
+
 		if err := os.Symlink(src, dst); err != nil {
 			return fmt.Errorf("symlink %s: %w", name, err)
 		}

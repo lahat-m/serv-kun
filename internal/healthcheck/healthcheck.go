@@ -17,7 +17,9 @@ func WaitHealthy(url string, timeout, interval time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 
-	for time.Now().Before(deadline) {
+	// Always attempt at least once, so a zero or already-elapsed timeout
+	// still produces a real result rather than an error wrapping nil.
+	for {
 		resp, err := client.Get(url)
 		if err != nil {
 			lastErr = err
@@ -27,6 +29,10 @@ func WaitHealthy(url string, timeout, interval time.Duration) error {
 				return nil
 			}
 			lastErr = fmt.Errorf("status %d", resp.StatusCode)
+		}
+
+		if !time.Now().Add(interval).Before(deadline) {
+			break
 		}
 		time.Sleep(interval)
 	}
