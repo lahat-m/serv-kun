@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	survey "github.com/AlecAivazis/survey/v2"
@@ -17,7 +18,7 @@ var userCmd = &cobra.Command{
 	RunE:  runUser,
 }
 
-func runUser(cmd *cobra.Command, _ []string) error {
+func runUser(cmd *cobra.Command, _ []string) (err error) {
 	requireRoot(cmd)
 
 	printBanner("serv-kun user")
@@ -42,6 +43,23 @@ func runUser(cmd *cobra.Command, _ []string) error {
 	if err := sudouser.Create(username); err != nil {
 		return fmt.Errorf("create user: %w", err)
 	}
+
+	// The account exists from here on. If anything below fails — including
+	// Ctrl-C at the key prompt — it would otherwise be left in the sudo group
+	// with no way to authenticate, and re-running would refuse with "already
+	// exists", leaving no way forward but a manual userdel. Undo instead.
+	defer func() {
+		if err == nil {
+			return
+		}
+		fmt.Println("\nSetup did not finish — removing the partially created account.")
+		if delErr := sudouser.Delete(username); delErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remove %q: %v\n", username, delErr)
+			fmt.Fprintf(os.Stderr, "remove it by hand before retrying:  sudo userdel -r %s\n", username)
+			return
+		}
+		fmt.Printf("✓ Rolled back — %q removed. Nothing was left behind; re-run when ready.\n", username)
+	}()
 
 	if err := sudouser.GrantSudo(username, osInfo); err != nil {
 		return fmt.Errorf("grant sudo: %w", err)

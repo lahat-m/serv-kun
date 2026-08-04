@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
+	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/spf13/cobra"
 )
 
@@ -34,10 +36,33 @@ Commands:
 // time in main.go's version var, "dev" for a local `go build`/`go run`).
 func Execute(version string) {
 	rootCmd.Version = version
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+
+	// Cobra prints the error itself; leaving that on as well as printing it
+	// here reported every failure twice.
+	rootCmd.SilenceErrors = true
+
+	// PersistentPreRun happens after flags and arguments are validated but
+	// before RunE, so a bad flag still gets a usage dump while a runtime
+	// failure — a failed useradd, an interrupted prompt — does not. A wall of
+	// flag documentation is no help when the problem isn't a flag.
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		cmd.SilenceUsage = true
 	}
+
+	err := rootCmd.Execute()
+	if err == nil {
+		return
+	}
+
+	// Ctrl-C is a choice, not a failure: say so plainly and use the shell's
+	// conventional 128+SIGINT status.
+	if errors.Is(err, terminal.InterruptErr) {
+		fmt.Fprintln(os.Stderr, "\nAborted.")
+		os.Exit(130)
+	}
+
+	fmt.Fprintln(os.Stderr, "Error:", err)
+	os.Exit(1)
 }
 
 // parentCommands exist only to group subcommands. Each must set both

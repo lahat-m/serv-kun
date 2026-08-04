@@ -4,3 +4,7 @@
 /tmp-validate
 .idea/
 .mcp.json
+
+# transient paste/scratch files
+error.md
+file.md

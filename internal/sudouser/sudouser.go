@@ -23,6 +23,26 @@ func Create(username string) error {
 	return system.RunCmd("useradd", "-m", "-s", "/bin/bash", username)
 }
 
+// Delete removes a user and their home directory. Used to roll back an
+// account whose setup didn't finish.
+//
+// Output is captured rather than streamed: userdel routinely complains that a
+// mail spool is missing, and printing that straight after "removing the
+// partially created account" reads like the rollback failed when it didn't.
+func Delete(username string) error {
+	out, err := exec.Command("userdel", "-r", username).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	// userdel also exits non-zero for cosmetic problems — a missing mail
+	// spool is exit 12 — so trust whether the account actually went away
+	// over the exit code.
+	if !Exists(username) {
+		return nil
+	}
+	return fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+}
+
 // SudoGroup returns the group that grants root privileges via sudo for the OS family.
 func SudoGroup(osInfo *system.Info) string {
 	if osInfo.Family == system.RHEL {
