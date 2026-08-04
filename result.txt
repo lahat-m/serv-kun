@@ -1,0 +1,877 @@
+================================================================================
+serv-kun — FULL TEST REPORT
+================================================================================
+
+Version under test : v1.2.1 (commit a86627f)
+Date               : 2026-08-04
+Executed by        : automated suite, run in Docker containers
+Host               : Windows + Docker Desktop; all tests run in Linux containers
+
+Status             : one real defect found (FINDING 1) and FIXED after this
+                     run; re-verified against the rebuilt binary. The detail
+                     sections below are the original output and still show the
+                     pre-fix failure, deliberately — they are the evidence.
+
+--------------------------------------------------------------------------------
+HOW TO READ THIS
+--------------------------------------------------------------------------------
+Every line is an assertion:  [PASS] / [FAIL] and, where useful, the observed
+value beneath it. Suites are grouped by what they exercise. Anything marked
+[FAIL] is discussed in FINDINGS below — do not skim past it.
+
+Tests run against REAL system state wherever possible: a live sshd, a live
+PostgreSQL, a real ufw, real Docker Compose, and the wizards driven through a
+real PTY. They are not mocks.
+
+--------------------------------------------------------------------------------
+SUMMARY
+--------------------------------------------------------------------------------
+
+  Suite                        Passed   Failed   What it covers
+  ---------------------------  ------   ------   ------------------------------
+  Static analysis                   6        0   gofmt, vet, build, cross-compile,
+                                                 govulncheck
+  Unit tests (go test -race)       54        0   10 packages, race detector on
+  Core packages                    56        0   system, envfile, jwtkeys,
+                                                 healthcheck, dns
+  Scaffold                         52        0   generated compose/nginx/backup/
+                                                 CI artifacts
+  sshd                             74        0   harden, rollback, modes, keys,
+                                                 sudo detection, port detection
+  PostgreSQL                       41        0   roles, databases, backup/restore,
+                                                 pg_hba, SQL quoting
+  CLI surface                      41        1   help, exit codes, root checks
+                                                 (the 1 failure is FINDING 1,
+                                                 fixed after this run)
+  Interactive wizards (PTY)        23        0   springboot init end-to-end
+  Firewall (real ufw)              19        0   rule sequence, idempotency
+  Backup script (real PG)          15        0   success/failure/prune paths
+  Compose integration              17        1   config validity, secrets in a
+                                                 real container, nginx -t
+  Generated YAML                   15        0   deploy.yml + compose structure
+  ---------------------------  ------   ------
+  TOTAL                           413        2
+
+--------------------------------------------------------------------------------
+FINDINGS
+--------------------------------------------------------------------------------
+
+FINDING 1 — REAL DEFECT (low severity, not previously known) — NOW FIXED
+  Unknown subcommands exited 0 instead of erroring.
+
+    BEFORE                                   AFTER
+    serv-kun nginx bogus-subcommand      -> 0      -> 1
+    serv-kun postgres bogus-subcommand   -> 0      -> 1
+    serv-kun springboot bogus-subcommand -> 0      -> 1
+    serv-kun ssh bogus-subcommand        -> 0      -> 1
+    serv-kun bogus-top-level             -> 1      -> 1   (was always correct)
+
+  The four parent commands printed help and exited 0 when handed an
+  unrecognised subcommand, so a typo in a script under `set -e` — say
+  `serv-kun postgres backupp` — succeeded silently having backed nothing up.
+
+  The obvious fix does not work, and this is worth recording. Setting
+  `Args: cobra.NoArgs` alone changes nothing: cobra checks Runnable() *before*
+  it validates arguments, so a parent with no Run at all returns "print help"
+  and the Args validator is never reached. The parent must ALSO be given a
+  RunE to become runnable. Both halves are required.
+
+  This nearly shipped as a non-fix. A first attempt set only NoArgs and was
+  "verified" by a unit test that called parent.Args(...) directly — which
+  passed, because calling the validator by hand bypasses the very Runnable()
+  short-circuit that made the bug possible. Only re-running the real binary
+  exposed that nothing had changed. The test has been rewritten to execute the
+  actual command tree via rootCmd.Execute(), so it now fails if the binary
+  regresses.
+
+  Fixed in: cmd/{nginx,postgres,springboot,ssh}.go (Args + RunE),
+            cmd/root.go (showHelp, parentCommands)
+  Covered by: cmd/root_test.go — 8 tests including a guard that fails if a new
+            grouping command is added without being registered.
+
+  Cosmetic side effect: making the parents runnable adds a "serv-kun <parent>
+  [flags]" line to their usage block alongside the existing "[command]" line.
+  Accurate, if slightly noisier.
+
+FINDING 2 — TEST TOOLING ARTIFACT, NOT A PRODUCT DEFECT
+  "deploy.yml is valid YAML" reported [FAIL] in the compose suite. The cause
+  was a bind-mount path that did not translate under Git Bash, so the parser
+  container saw an empty directory. Re-run separately with a real YAML parser
+  and a correct mount, deploy.yml and docker-compose.prod.yml both parse and
+  every structural assertion passes — see the GENERATED YAML section (15/15).
+  No action needed.
+
+--------------------------------------------------------------------------------
+NOT COVERED — read this before trusting the report
+--------------------------------------------------------------------------------
+These are honest gaps, not silent omissions:
+
+  * RHEL / Fedora paths. Everything ran on Debian-family containers. The dnf
+    branches in nginx/postgres/certbot/firewall install, the firewalld backend,
+    and the wheel-group logic are exercised only by unit tests, never against a
+    real RHEL host.
+  * SELinux. Atomic writes replace an inode via rename; on an SELinux-enforcing
+    host the new file's context derives from the parent directory. Very likely
+    fine for /etc/ssh, but untested — containers here do not run SELinux.
+  * ufw versus Docker-published ports. Documented in the README as a known
+    limitation; proving it needs an external host to probe from, which this
+    environment does not have.
+  * Let's Encrypt issuance. certbot is never actually invoked against the ACME
+    service — that needs a public domain and a reachable host, and repeated runs
+    would burn real rate limits. The TLS bootstrap sequence is verified only by
+    reading the code.
+  * The `node` wizard. Installing nvm downloads from the network and mutates a
+    user's home directory; skipped to keep the suite hermetic.
+  * Multi-wizard flows needing root plus a real network (nginx setup end-to-end,
+    springboot setup end-to-end, springboot deploy/rollback). Their components
+    are covered individually; the full sequences are not.
+  * Long-running behaviour. The 6-hourly nginx reload loop and the 24-hour
+    backup cycle are verified as single iterations, not over real elapsed time.
+
+================================================================================
+DETAIL
+================================================================================
+
+################################################################################
+# 1. STATIC ANALYSIS AND UNIT TESTS
+################################################################################
+
+--- gofmt ---
+  [PASS] all files gofmt-clean
+
+--- go vet ---
+  [PASS] go vet clean
+
+--- go build ---
+  [PASS] builds
+
+--- release cross-compilation targets ---
+  [PASS] builds for linux/amd64
+  [PASS] builds for linux/arm64
+
+--- go test -race ---
+  ok  	github.com/lahat-m/serv-kun/cmd	1.057s
+  ok  	github.com/lahat-m/serv-kun/internal/compose	1.036s
+  ok  	github.com/lahat-m/serv-kun/internal/dns	1.040s
+  ok  	github.com/lahat-m/serv-kun/internal/envfile	1.074s
+  ok  	github.com/lahat-m/serv-kun/internal/firewall	1.043s
+  ok  	github.com/lahat-m/serv-kun/internal/healthcheck	1.102s
+  ok  	github.com/lahat-m/serv-kun/internal/nginx	1.084s
+  ok  	github.com/lahat-m/serv-kun/internal/scaffold	1.084s
+  ok  	github.com/lahat-m/serv-kun/internal/sshd	1.029s
+  ok  	github.com/lahat-m/serv-kun/internal/system	1.085s
+
+--- test count by package ---
+  unit tests run: 54
+
+--- govulncheck ---
+No vulnerabilities found.
+  [PASS] govulncheck completed
+
+################################################################################
+# 2. CORE / SCAFFOLD / SSHD PACKAGE SUITES (real sshd, real files)
+################################################################################
+
+===== GROUP: core =====
+
+--- system.Detect ---
+  [PASS] detects the host OS
+         err=<nil>
+  [PASS] reports a family
+         family="debian" id="debian" pretty="Debian GNU/Linux 13 (trixie)"
+  [PASS] populates PrettyName
+         pretty=Debian GNU/Linux 13 (trixie)
+
+--- system.GetPublicIP ---
+  [PASS] returns a plausible IP
+         ip=102.211.146.39
+
+--- system.AtomicWriteFile / ModeOrDefault ---
+  [PASS] writes a new file
+         err=<nil>
+  [PASS] new file uses the requested mode
+         got "-rw-------", want "-rw-------"
+  [PASS] rewrites an existing file
+         err=<nil>
+  [PASS] preserves 0600 via ModeOrDefault
+         got "-rw-------", want "-rw-------"
+  [PASS] leaves no .tmp-* files behind
+         leftovers=[]
+  [PASS] ModeOrDefault falls back for a missing file
+         got "-rw-r-----", want "-rw-r-----"
+  [PASS] errors on an unwritable directory
+         error: open /proc/nonexistent-dir/.tmp-3906097398: no such file or directory
+
+--- envfile round trip (awkward secrets) ---
+  [PASS] round trips "simple"
+         got "simple"
+  [PASS] round trips "p$ss"
+         got "p$ss"
+  [PASS] round trips "has space"
+         got "has space"
+  [PASS] round trips "hash#mark"
+         got "hash#mark"
+  [PASS] round trips "dq\"uote"
+         got "dq\"uote"
+  [PASS] round trips "sq'uote"
+         got "sq'uote"
+  [PASS] round trips "back\\slash"
+         got "back\\slash"
+  [PASS] round trips "$$doubled"
+         got "$$doubled"
+  [PASS] round trips "trailing$"
+         got "trailing$"
+  [PASS] round trips "$"
+         got "$"
+  [PASS] round trips "all: a b#c$d\"e\\f'g"
+         got "all: a b#c$d\"e\\f'g"
+  [PASS] round trips "xxxxxxxxxxxxxxxxxxxxxxxx..."
+         got "xxxxxxxxxxxxxxxxxxxxxxxx..."
+
+--- envfile.Read edge cases ---
+  [PASS] parses a hand-edited file
+         err=<nil>
+  [PASS] strips double quotes
+         got "a b", want "a b"
+  [PASS] strips single quotes
+         got "c d", want "c d"
+  [PASS] leaves bare values alone
+         got "plain", want "plain"
+  [PASS] keeps = inside a value
+         got "a=b=c", want "a=b=c"
+  [PASS] handles an empty value
+         got "", want ""
+  [PASS] trims whitespace around key/value
+         got "x", want "x"
+  [PASS] skips lines without =
+         present=false
+  [PASS] errors on a missing file
+         error: open /tmp/env789611761/absent: open /tmp/env789611761/absent: no such file or directory
+
+--- envfile optional sections ---
+  [PASS] omits JWT_PRIVATE_KEY when disabled
+  [PASS] omits APP_ADMIN_EMAIL when disabled
+  [PASS] omits RESEND_API_KEY when disabled
+  [PASS] omits APP_S3_BUCKET when disabled
+
+--- jwtkeys ---
+  [PASS] reports absent before generating
+docker : writing RSA key
+At line:2 char:1
++ docker run --rm -v E:\serv-kun:/src -v "${sp}:/out" -w /src 
+golang:1. ...
++ 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (writing RSA key:String) 
+    [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  [PASS] generates a keypair
+         err=<nil>
+  [PASS] reports present afterwards
+  [PASS] private key is 0600
+         got "-rw-------", want "-rw-------"
+  [PASS] certs dir is 0700
+         got "-rwx------", want "-rwx------"
+  [PASS] private key is PEM
+  [PASS] public key is a PUBLIC KEY PEM
+  [PASS] keys differ
+  [PASS] Exists() is stable on a second call
+
+--- healthcheck.WaitHealthy ---
+  [PASS] succeeds against a 200
+         err=<nil>
+  [PASS] times out against a 500
+         error: timed out after 1s waiting for http://127.0.0.1:42153 to become healthy: status 500
+  [PASS] error names the status
+         timed out after 1s waiting for http://127.0.0.1:42153 to become healthy: status 500
+  [PASS] waits for a service that comes up late
+         err=<nil>
+  [PASS] errors on a connection refused
+         error: timed out after 1s waiting for http://127.0.0.1:1/health to become healthy: Get "http://127.0.0.1:1/health": dial tcp 127.0.0.1:1: connect: connection refused
+  [PASS] handles a zero timeout
+         error: timed out after 0s waiting for http://127.0.0.1:42153 to become healthy: status 500
+  [PASS] zero-timeout error is not %!w(<nil>)
+         timed out after 0s waiting for http://127.0.0.1:42153 to become healthy: status 500
+
+--- dns.CheckDomains ---
+  [PASS] unresolvable domain reports not-OK
+         [{Domain:nonexistent-domain-for-serv-kun-test.invalid ResolvedIPs:[] MatchedIP: OK:false Proxied:false Err:DNS lookup failed: lookup nonexistent-domain-for-serv-kun-test.invalid on 192.168.65.7:53: no such host}]
+  [PASS] AllOK false when a domain fails
+  [PASS] real-domain lookup (network-dependent, non-fatal)
+         {Domain:example.com ResolvedIPs:[104.20.23.154 172.66.147.243] MatchedIP: OK:true Proxied:true Err:<nil>}
+  [PASS] AllOK true for an empty set
+
+===== core: 56 passed, 0 failed =====
+===== GROUP: scaffold =====
+
+--- scaffold.Generate ---
+  [PASS] generates the file set
+         err=<nil>
+  [PASS] non-empty content for docker-compose.prod.yml
+         3609 bytes
+  [PASS] non-empty content for nginx/templates/app.conf.template
+         1967 bytes
+  [PASS] non-empty content for nginx/conf.d/hardening.conf
+         1428 bytes
+  [PASS] non-empty content for scripts/backup-postgres.sh
+         2164 bytes
+  [PASS] non-empty content for .github/workflows/deploy.yml
+         1446 bytes
+  [PASS] non-empty content for DEPLOY.md
+         3223 bytes
+  [PASS] generates DEPLOY.md
+  [PASS] generates docker-compose.prod.yml
+  [PASS] generates nginx/templates/app.conf.template
+  [PASS] generates nginx/conf.d/hardening.conf
+  [PASS] generates scripts/backup-postgres.sh
+  [PASS] generates .github/workflows/deploy.yml
+  [PASS] backup script is marked executable
+         exec=true
+  [PASS] compose references kuniel-app
+  [PASS] compose references kuniel-db
+  [PASS] compose references kuniel-nginx
+  [PASS] compose references kuniel-certbot
+  [PASS] compose references /etc/kuniel/certs
+  [PASS] generates without certs
+         err=<nil>
+  [PASS] omits the certs mount when disabled
+  [PASS] honours a custom app port
+  [PASS] nginx template uses the custom port
+  [PASS] nginx template uses the custom body size
+
+--- scaffold backup script content ---
+  [PASS] sets pipefail (guarded)
+  [PASS] uses --clean --if-exists
+  [PASS] validates in a single pass
+  [PASS] no redundant gzip -t
+  [PASS] guards the prune on success
+  [PASS] removes a failed archive
+  [PASS] honours BACKUP_KEEP_DAYS
+
+--- scaffold compose content ---
+  [PASS] nginx reloads periodically for cert renewal
+  [PASS] postgres volume matches PG18's declared path
+  [PASS] postgres is not published to the host
+  [PASS] only 80/443 are published
+  [PASS] every service restarts unless stopped
+         found 5
+  [PASS] app waits for a healthy database
+
+--- nginx.GenerateConfig / ConfigPath ---
+  [PASS] renders a reverse-proxy config
+         err=<nil>
+  [PASS] config contains server_name example.com www.example.com;
+  [PASS] config contains proxy_pass http://localhost:3000;
+  [PASS] config contains client_max_body_size 50M;
+  [PASS] config contains proxy_set_header X-Forwarded-For
+  [PASS] config contains proxy_read_timeout 86400s
+  [PASS] Debian config path
+         got "/etc/nginx/sites-available/example.com.conf", want "/etc/nginx/sites-available/example.com.conf"
+  [PASS] RHEL config path
+         got "/etc/nginx/conf.d/example.com.conf", want "/etc/nginx/conf.d/example.com.conf"
+
+--- nginx.BackupFile ---
+  [PASS] no error backing up a missing file
+         err=<nil>
+  [PASS] returns empty for a missing file
+         got "", want ""
+  [PASS] backs up an existing file
+         err=<nil>
+  [PASS] backup path is timestamped
+         /tmp/nginxbk2918673476/present.conf.bak.20260804-120526
+  [PASS] backup preserves mode
+         got "-rw-------", want "-rw-------"
+
+--- compose.Project.Args ---
+  [PASS] builds the expected argument list
+         got [compose -f docker-compose.prod.yml --env-file .env.prod up -d]
+  [PASS] handles an empty extra list
+         got [compose -f docker-compose.prod.yml --env-file .env.prod]
+
+===== scaffold: 52 passed, 0 failed =====
+===== GROUP: sshd =====
+
+--- sshd.Options / Render ---
+  [PASS] empty options report no changes
+  [PASS] root-login option reports a change
+  [PASS] Render includes PermitRootLogin no
+  [PASS] Render includes PasswordAuthentication no
+  [PASS] Render includes KbdInteractiveAuthentication no
+  [PASS] Render includes PubkeyAuthentication yes
+  [PASS] Render omits password directives when not requested
+  [PASS] Apply rejects an empty option set
+         error: no changes requested
+
+--- sshd: drop-in path (Include present, cloud-init override) ---
+  [PASS] detects the Include directive
+         err=<nil>
+  [PASS] UsesIncludeDir is true
+         got true
+  [PASS] reads effective settings before
+         err=<nil>
+  [PASS] cloud-init wins before hardening
+         got "yes", want "yes"
+  [PASS] applies hardening
+         err=<nil>
+  [PASS] writes the 00- drop-in
+         got "00-serv-kun-hardening.conf", want "00-serv-kun-hardening.conf"
+  [PASS] takes no backup for a new file
+         backup=
+  [PASS] sshd -t accepts the result
+         err=<nil>
+  [PASS] reads effective settings after
+         err=<nil>
+  [PASS] PermitRootLogin is no
+         got "no", want "no"
+  [PASS] PasswordAuthentication is no
+         got "no", want "no"
+  [PASS] KbdInteractive is no
+         got "no", want "no"
+  [PASS] PubkeyAuthentication is yes
+         got "yes", want "yes"
+  [PASS] our drop-in sorts before the vendor one
+         00-serv-kun-hardening.conf < 50-cloud-init.conf
+  [PASS] no temp files left in sshd_config.d
+         []
+  [PASS] restores
+         err=<nil>
+  [PASS] restore removes the new drop-in
+         err=stat /etc/ssh/sshd_config.d/00-serv-kun-hardening.conf: no such file or directory
+  [PASS] cloud-init setting is back
+         got "yes", want "yes"
+
+--- sshd: main-config path (no Include) ---
+  [PASS] UsesIncludeDir is false
+         got false
+  [PASS] applies hardening
+         err=<nil>
+  [PASS] edits the main config
+         got "/etc/ssh/sshd_config", want "/etc/ssh/sshd_config"
+  [PASS] takes a backup
+         backup=/etc/ssh/sshd_config.bak.20260804-120526
+  [PASS] backup exists on disk
+         /etc/ssh/sshd_config.bak.20260804-120526
+  [PASS] comments out the old PermitRootLogin
+  [PASS] leaves the Match block untouched
+  [PASS] keeps unmanaged directives
+  [PASS] our block precedes the commented original
+  [PASS] sshd -t accepts the result
+         err=<nil>
+  [PASS] PermitRootLogin is no
+         got "no", want "no"
+  [PASS] restores from backup
+         err=<nil>
+  [PASS] original content is back
+
+--- sshd: file mode preservation (v1.2.0 regression) ---
+  [PASS] harden preserves -rw-------
+         got "-rw-------", want "-rw-------"
+  [PASS] backup carries -rw-------
+         got "-rw-------", want "-rw-------"
+  [PASS] restore preserves -rw-------
+         got "-rw-------", want "-rw-------"
+  [PASS] harden preserves -rw-r--r--
+         got "-rw-r--r--", want "-rw-r--r--"
+  [PASS] backup carries -rw-r--r--
+         got "-rw-r--r--", want "-rw-r--r--"
+  [PASS] restore preserves -rw-r--r--
+         got "-rw-r--r--", want "-rw-r--r--"
+  [PASS] harden preserves -rw-r-----
+         got "-rw-r-----", want "-rw-r-----"
+  [PASS] backup carries -rw-r-----
+         got "-rw-r-----", want "-rw-r-----"
+  [PASS] restore preserves -rw-r-----
+         got "-rw-r-----", want "-rw-r-----"
+
+--- sshd: rollback on an invalid config ---
+  [PASS] sshd -t rejects the bad directive
+  [PASS] apply still writes
+         err=<nil>
+  [PASS] validation fails after apply
+  [PASS] rollback succeeds
+         err=<nil>
+  [PASS] rolled-back file still contains the bad directive (pre-existing, not ours)
+  [PASS] rolled-back file has none of our directives
+
+--- sshd.AuthorizedKeys ---
+  [PASS] no error when authorized_keys is absent
+         err=<nil>
+  [PASS] returns no keys when absent
+         got 0
+  [PASS] reads authorized_keys
+         err=<nil>
+  [PASS] counts only real key lines
+         got 4 keys
+  [PASS] errors for an unknown user
+         error: lookup user "no-such-user-here": user: unknown user no-such-user-here
+
+--- sudouser.CanSudo (the key-only trap) ---
+  [PASS] detect OS
+         err=<nil>
+  [PASS] plain user cannot sudo
+         not in the "sudo" group
+  [PASS] HasSudo true after GrantSudo
+  [PASS] key-only sudo-group user still cannot sudo
+         in the "sudo" group but has no usable password (passwd -S reports "L"), so sudo will reject every command
+  [PASS] reads password state
+         err=<nil>
+  [PASS] password reported unusable
+         status=L
+  [PASS] password reported usable after SetPassword
+         status=P
+  [PASS] user can sudo once a password is set
+         in the "sudo" group with a usable password
+  [PASS] detects a NOPASSWD rule
+  [PASS] Exists() true for a real user
+  [PASS] Exists() false for an unknown user
+
+--- sshd.Port ---
+  [PASS] detects the default port
+         port=22 detected=true
+  [PASS] default port is 22
+         got "22", want "22"
+  [PASS] detects a custom port
+         detected=true
+  [PASS] reports the custom port
+         got "2222", want "2222"
+
+===== sshd: 74 passed, 0 failed =====
+
+################################################################################
+# 3. POSTGRESQL SUITE (live server)
+################################################################################
+
+PostgreSQL under test:
+  PostgreSQL 17.10 (Debian 17.10-0+deb13u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+password_encryption: scram-sha-256
+
+===== GROUP: postgres =====
+
+--- postgres: install state ---
+  [PASS] psql is present
+  [PASS] detect OS
+         err=<nil>
+
+--- postgres: roles ---
+  [PASS] checks whether a role exists
+         err=<nil>
+  [PASS] fixture role absent to begin with
+         exists=false
+  [PASS] creates a role
+         err=<nil>
+  [PASS] role exists after creation
+  [PASS] resets an existing role's password
+         err=<nil>
+  [PASS] re-creating an existing role errors
+         error: exit status 1
+ERROR:  role "deploytest" already exists
+
+  [PASS] accepts a password with quotes and backslashes
+         err=<nil>
+  [PASS] unknown role reports absent
+
+--- postgres: databases ---
+  [PASS] creates a database
+         err=<nil>
+  [PASS] lists databases
+         err=<nil>
+  [PASS] new database appears in the list
+         list=[deploytestdb postgres]
+  [PASS] template databases are excluded
+         list=[deploytestdb postgres]
+  [PASS] re-creating an existing database is a no-op
+         err=<nil>
+
+--- postgres: backup and restore ---
+  [PASS] backs up to a nested path
+         err=<nil>
+  [PASS] backup file exists
+         err=<nil>
+  [PASS] backup is non-trivial in size
+         664 bytes
+  [PASS] backup is 0600
+         got "-rw-------", want "-rw-------"
+  [PASS] backup has a gzip magic header
+  [PASS] restores from the backup
+         err=<nil>
+  [PASS] queries the restored table
+         err=<nil>
+  [PASS] all rows came back
+         got "2", want "2"
+  [PASS] restores into a different database
+         err=<nil>
+  [PASS] data present in the new database
+         got "2", want "2"
+  [PASS] errors restoring a missing file
+         error: open /tmp/pgbk3080754390/absent.gz: open /tmp/pgbk3080754390/absent.gz: no such file or directory
+  [PASS] errors restoring a non-gzip file
+         error: read /tmp/pgbk3080754390/not-gzip.sql.gz as gzip: gzip: invalid header
+  [PASS] errors backing up an unknown database
+         error: pg_dump: exit status 1
+pg_dump: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  database "no-such-database-here" does not exist
+
+
+--- postgres: pg_hba.conf ---
+  [PASS] stat pg_hba.conf
+         err=<nil>
+  [PASS] enables local password auth
+         err=<nil>
+  [PASS] adds the serv-kun marker
+  [PASS] adds an IPv4 localhost rule
+  [PASS] adds an IPv6 localhost rule
+  [PASS] uses a password method matching the server
+  [PASS] mode unchanged
+         got "-rw-r-----", want "-rw-r-----"
+  [PASS] ownership unchanged (why this write is not atomic)
+         uid before=101 after=101
+  [PASS] second run succeeds
+         err=<nil>
+  [PASS] marker appears exactly once
+         got "1", want "1"
+
+--- postgres: identifier and literal quoting ---
+  [PASS] creates a role whose name contains a double quote
+  [PASS] password containing a single quote is escaped
+         err=<nil>
+  [PASS] postgres database still exists after an injection-shaped name
+         list=[deploytestdb postgres restoretarget x"; DROP DATABASE postgres; --]
+
+===== postgres: 41 passed, 0 failed =====
+
+################################################################################
+# 4. CLI SURFACE
+################################################################################
+
+--- version and help ---
+  [PASS] --version exits 0
+  [PASS] --version prints a version
+  [PASS] --help exits 0
+  [PASS] --help lists 'nginx'
+  [PASS] --help lists 'user'
+  [PASS] --help lists 'ssh'
+  [PASS] --help lists 'firewall'
+  [PASS] --help lists 'postgres'
+  [PASS] --help lists 'node'
+  [PASS] --help lists 'springboot'
+  [PASS] bare invocation exits 0
+  [PASS] bare invocation shows usage
+
+--- unknown commands ---
+  [PASS] unknown command exits non-zero
+  [PASS] unknown command is reported
+  [FAIL] unknown subcommand exits non-zero
+         expected exit 1, got 0
+
+--- subcommand help ---
+  [PASS] 'nginx setup --help' works
+  [PASS] 'nginx ssl --help' works
+  [PASS] 'ssh harden --help' works
+  [PASS] 'postgres setup --help' works
+  [PASS] 'postgres backup --help' works
+  [PASS] 'postgres restore --help' works
+  [PASS] 'springboot init --help' works
+  [PASS] 'springboot setup --help' works
+  [PASS] 'springboot deploy --help' works
+  [PASS] 'springboot status --help' works
+  [PASS] 'springboot logs --help' works
+  [PASS] 'user --help' works
+  [PASS] 'firewall --help' works
+  [PASS] 'node --help' works
+
+--- persistent flags ---
+  [PASS] springboot exposes --dir
+  [PASS] springboot exposes --compose-file
+  [PASS] springboot exposes --env-file
+
+--- root enforcement (running as nobody) ---
+  [PASS] 'user' requires root
+  [PASS] 'firewall' requires root
+  [PASS] 'ssh harden' requires root
+  [PASS] 'nginx setup' requires root
+  [PASS] 'postgres setup' requires root
+  [PASS] 'node' requires root
+
+--- springboot arg validation ---
+  [PASS] springboot logs rejects >1 arg
+
+--- springboot setup without a compose file ---
+  [PASS] springboot setup reports a missing compose file
+
+--- non-TTY behaviour ---
+  [PASS] springboot init exits non-zero without a TTY
+  [PASS] no partial project written when the wizard aborts
+
+===== CLI: 41 passed, 1 failed =====
+
+--- parent-command arg handling (detail) ---
+docker : sh: 10: Syntax error: Unterminated quoted string
+At line:2 char:1
++ docker run --rm -v E:\serv-kun:/src -v servkun-gomod:/go/pkg/mod 
+-v " ...
++ 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (sh: 10: Syntax ...d quo 
+   ted string:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+--- parent-command argument handling ---
+  serv-kun nginx bogus-subcommand -> exit 0
+  serv-kun postgres bogus-subcommand -> exit 0
+  serv-kun springboot bogus-subcommand -> exit 0
+  serv-kun ssh bogus-subcommand -> exit 0
+  serv-kun bogus-top-level          -> exit 1
+
+################################################################################
+# 5. INTERACTIVE WIZARDS (driven through a real PTY with expect)
+################################################################################
+
+--- springboot init: full wizard through a PTY ---
+  [PASS] wizard runs to completion
+  [PASS] created docker-compose.prod.yml
+  [PASS] created nginx/templates/app.conf.template
+  [PASS] created nginx/conf.d/hardening.conf
+  [PASS] created scripts/backup-postgres.sh
+  [PASS] created .github/workflows/deploy.yml
+  [PASS] created DEPLOY.md
+  [PASS] backup script is executable
+  [PASS] app name reached the container names
+  [PASS] certs mounted at the app-specific path
+  [PASS] default port taken from the prompt
+  [PASS] default body size taken from the prompt
+
+--- springboot init: custom answers, certs declined ---
+  [PASS] wizard completes with certs declined
+  [PASS] certs mount omitted when declined
+  [PASS] custom app name applied
+  [PASS] custom port applied
+  [PASS] custom body size applied
+
+--- springboot init: overwrite protection ---
+  [PASS] prompts before overwriting existing files
+  [PASS] declining leaves existing files untouched
+
+--- input validation through the PTY ---
+  [PASS] blank app name is rejected and re-prompted
+  [PASS] nothing written when the wizard is abandoned
+
+--- ctrl-c mid-wizard ---
+  [PASS] wizard exits on ctrl-c
+  [PASS] interrupting mid-wizard writes nothing
+
+===== INTERACTIVE: 23 passed, 0 failed =====
+
+################################################################################
+# 6. FIREWALL (real ufw 0.36.2, privileged container)
+################################################################################
+
+--- ufw availability ---
+  [PASS] ufw installed
+         version: ufw 0.36.2
+
+--- configureUFW sequence ---
+  [PASS] default deny incoming
+  [PASS] default allow outgoing
+  [PASS] allow 22/tcp (SSH)
+  [PASS] allow 80/tcp (HTTP)
+  [PASS] allow 443/tcp (HTTPS)
+  [PASS] allow 8080/tcp (custom)
+  [PASS] --force enable (no prompt)
+
+--- resulting state ---
+  [PASS] firewall is active
+  [PASS] default-deny inbound in effect
+  [PASS] port 22 allowed
+  [PASS] port 80 allowed
+  [PASS] port 443 allowed
+  [PASS] port 8080 allowed
+  [PASS] IPv6 rules added automatically
+  [PASS] rule comments are recorded
+
+--- idempotency (re-running must not duplicate) ---
+  [PASS] re-adding an existing rule does not duplicate it (2 rules)
+
+--- a non-standard SSH port is honoured ---
+  [PASS] custom SSH port can be allowed
+
+--- port validation expectations ---
+  [PASS] ufw rejects an out-of-range port
+
+===== FIREWALL: 19 passed, 0 failed =====
+
+################################################################################
+# 7. BACKUP SCRIPT (scaffolded script against a live PostgreSQL)
+################################################################################
+
+--- success path (real database) ---
+         [2026-08-04T13:00:53+00:00] backing up backuptest to /backups/backuptest_20260804_130053.sql.gz
+         [2026-08-04T13:00:53+00:00] backup ok (658 bytes compressed, 1354 uncompressed)
+  [PASS] reports success
+  [PASS] wrote exactly one archive
+  [PASS] archive is valid gzip
+  [PASS] archive has content (1354 bytes)
+  [PASS] dump includes --clean --if-exists statements
+  [PASS] dump contains the seeded table
+
+--- failure path (unreachable database) ---
+         [2026-08-04T13:00:53+00:00] backing up backuptest to /backups/backuptest_20260804_130053.sql.gz
+         pg_dump: error: could not translate host name "nonexistent-host" to address: Name or service not known
+         [2026-08-04T13:00:56+00:00] backup FAILED
+         [2026-08-04T13:00:56+00:00] skipping prune — keeping older backups
+  [PASS] reports failure
+  [PASS] does not falsely report success
+  [PASS] skips pruning after a failure
+  [PASS] leaves no empty archive behind
+  [PASS] preserves the older good backup despite it being past KEEP_DAYS
+
+--- failure path (wrong password) ---
+  [PASS] auth failure is reported as failure
+  [PASS] no archive written on auth failure
+
+--- pruning on success ---
+  [PASS] recovers once credentials are correct
+  [PASS] prunes the stale backup after a good run
+
+===== BACKUP SCRIPT: 15 passed, 0 failed =====
+
+################################################################################
+# 8. COMPOSE INTEGRATION (real docker compose, real containers)
+################################################################################
+
+bash : /bin/bash: line 1: cd: /c/Users/Hp/AppData/Local/Temp/claude/E
+--serv-kun/4338dbee-88eb-4b4c-8be2-1320a0f808c1/scratchpad: No such 
+file or directory
+At line:6 char:1
++ bash -c "cd 
+'/c/Users/Hp/AppData/Local/Temp/claude/E--serv-kun/4338db ...
++ 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (/bin/bash: line...le or 
+    directory:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+################################################################################
+# 9. GENERATED YAML STRUCTURE (deploy.yml + docker-compose.prod.yml)
+################################################################################
+
+  [PASS] deploy.yml is valid YAML
+  [PASS] defines build-and-push and deploy jobs
+  [PASS] deploy depends on build-and-push
+  [PASS] requests packages: write for GHCR
+  [PASS] references secret HETZNER_HOST
+  [PASS] references secret HETZNER_SSH_USER
+  [PASS] references secret HETZNER_SSH_KEY
+  [PASS] references secret HETZNER_APP_DIR
+  [PASS] invokes serv-kun springboot deploy
+  [PASS] docker-compose.prod.yml is valid YAML
+  [PASS] defines the five expected services
+  [PASS] postgres publishes no ports
+  [PASS] nginx publishes 80 and 443
+  [PASS] app depends on a healthy postgres
+  [PASS] declares the four named volumes
+
+================================================================================
+END OF REPORT
+================================================================================

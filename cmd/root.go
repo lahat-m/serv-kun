@@ -40,6 +40,26 @@ func Execute(version string) {
 	}
 }
 
+// parentCommands exist only to group subcommands. Each must set both
+// Args: cobra.NoArgs and RunE: showHelp — see showHelp for why one without
+// the other silently does nothing. root_test.go enforces it.
+func parentCommands() []*cobra.Command {
+	return []*cobra.Command{nginxCmd, sshCmd, postgresCmd, springbootCmd}
+}
+
+// showHelp is the RunE for grouping commands, printing usage for a bare
+// `serv-kun <parent>`.
+//
+// It also exists to make the parent *runnable*, which is load-bearing: cobra
+// checks Runnable() before it validates arguments, so a parent with no Run at
+// all returns "print help" and exits 0 — its Args validator is never reached
+// and `serv-kun postgres backupp` succeeds having backed up nothing. Setting
+// cobra.NoArgs alone does not fix that; the command has to be runnable for
+// cobra to get as far as checking the arguments.
+func showHelp(cmd *cobra.Command, _ []string) error {
+	return cmd.Help()
+}
+
 func init() {
 	nginxCmd.AddCommand(nginxSetupCmd, nginxSSLCmd)
 	sshCmd.AddCommand(sshHardenCmd)

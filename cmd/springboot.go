@@ -12,6 +12,8 @@ var springbootCmd = &cobra.Command{
 layout: a compose file with "app", "postgres", "nginx", and "certbot"
 services, driven by a .env.prod file. Run these from the project directory
 (the one containing docker-compose.prod.yml), or pass --dir.`,
+	Args: cobra.NoArgs, // reject mistyped subcommands — see showHelp in root.go
+	RunE: showHelp,
 }
 
 func init() {
