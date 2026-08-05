@@ -12,6 +12,9 @@ config file editing required.
 - **node** — install Node.js via nvm for a user and pick a default version
 - **springboot** — set up and deploy a Dockerized Spring Boot app shaped like [Kuniel](https://github.com/lahat-m/kuniel)'s `docker-compose.prod.yml`
 
+> Built on [**server-wiz**](https://github.com/hardope/server-wiz) by
+> [hardope](https://github.com/hardope) — see [Acknowledgements](#acknowledgements).
+
 ## Install
 
 ```bash
@@ -494,10 +497,50 @@ image reference and recreates the container again, so a bad deploy doesn't
 leave the site down. A rollback still exits non-zero — the deploy failed and
 needs investigating even though the site recovered.
 
+The container is always recreated, even when the image and config are
+unchanged. Left to itself `docker compose up` skips such a service and
+reports it as `Running`, which reads as a completed deploy while nothing was
+deployed — and the health check that follows would be judging a container
+this command never touched.
+
+If the app turns out to be running the same image the pull just produced —
+usual when CI has already deployed it, or when it's crash-looping — there is
+no earlier image to return to, and you're told exactly that instead of
+watching a "rollback" redeploy the identical build. A failure in that state
+is in the image or in `.env.prod`, not in the upgrade.
+
 ```bash
 sudo serv-kun springboot status   # docker compose ps + a health-endpoint check
 sudo serv-kun springboot logs     # tail -f the app container's logs
 ```
+
+## Acknowledgements
+
+serv-kun is built on [**server-wiz**](https://github.com/hardope/server-wiz) by
+[hardope](https://github.com/hardope). That's where this project starts from,
+not something it happens to resemble.
+
+The premise it's named for is hardope's: that provisioning a Linux box should
+be a sequence of answered questions rather than a pile of hand-edited config
+files, with each concern getting its own wizard. So is the shape that carries
+it — the Go CLI layout, the per-distro package-manager handling, and the
+`nginx`, `user`, `postgres` and `node` wizards, which between them still do
+most of the work here.
+
+What serv-kun adds on top:
+
+- `ssh harden` — disabling root login and password authentication, with a
+  lockout check that refuses to run unless a named non-root user has both a
+  working key and usable `sudo`, and drop-in placement that survives
+  `50-cloud-init.conf`
+- `firewall` — default-deny inbound via ufw/firewalld, reading the real SSH
+  port from the running sshd and adding allow rules *before* the default
+  policy takes effect
+- `springboot` — `init`/`setup`/`deploy`/`status`/`logs` for a Dockerized
+  Spring Boot + Postgres stack behind nginx, including Let's Encrypt
+  bootstrap and health-checked deploys with automatic rollback
+
+Thanks to hardope for building the thing that was worth extending.
 
 ## Supported systems
 
