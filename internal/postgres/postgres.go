@@ -139,7 +139,7 @@ func ListDatabases() ([]string, error) {
 // version-skew errors ("unsupported version in file header"); any psql can
 // replay it. Note: gzip is compression, not encryption — the backup file is
 // exactly as sensitive as the database itself and should be handled that way.
-func Backup(database, destPath string) error {
+func Backup(database, destPath string) (err error) {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return fmt.Errorf("create backup directory: %w", err)
 	}
@@ -148,7 +148,16 @@ func Backup(database, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("create backup file: %w", err)
 	}
-	defer f.Close()
+
+	// The file is created before pg_dump runs, so without this a failed dump
+	// leaves an empty or truncated file named exactly like a real backup —
+	// and `postgres restore` offers any readable file as a candidate.
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(destPath)
+		}
+	}()
 
 	gz := gzip.NewWriter(f)
 
@@ -160,11 +169,17 @@ func Backup(database, destPath string) error {
 	cmd.Stdout = gz
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	if err = cmd.Run(); err != nil {
 		return fmt.Errorf("pg_dump: %w\n%s", err, stderr.String())
 	}
-	if err := gz.Close(); err != nil {
+	if err = gz.Close(); err != nil {
 		return fmt.Errorf("finalize backup file: %w", err)
+	}
+	// Closed explicitly rather than deferred: a failure flushing the last
+	// block (a full disk, say) means the backup is truncated, and a deferred
+	// Close would drop that error and report success.
+	if err = f.Close(); err != nil {
+		return fmt.Errorf("close backup file: %w", err)
 	}
 	return nil
 }
@@ -233,15 +248,36 @@ func EnableLocalPasswordAuth(osInfo *system.Info) error {
 			"host    all             all             ::1/128                 %s\n\n",
 		method, method)
 
-	// Deliberately a plain in-place write, not system.AtomicWriteFile:
-	// pg_hba.conf is owned by postgres:postgres, and an atomic write renames a
-	// root-created temp file over it, leaving it root-owned. PostgreSQL would
-	// then be unable to read its own auth config and refuse to start.
-	// Truncating the existing inode keeps the ownership intact.
-	if err := os.WriteFile(path, append([]byte(header), data...), 0640); err != nil {
+	// Atomic, so a crash mid-write can't truncate PostgreSQL's auth config and
+	// leave the server unable to start. AtomicWriteFile renames a root-created
+	// temp file into place, which would leave pg_hba.conf root-owned — and
+	// PostgreSQL, running as postgres, could then no longer read it — so the
+	// original ownership is captured first and restored immediately after.
+	uid, gid := ownerOf(path)
+	if err := system.AtomicWriteFile(path, append([]byte(header), data...), system.ModeOrDefault(path, 0640)); err != nil {
 		return fmt.Errorf("write pg_hba.conf: %w", err)
 	}
+	if uid >= 0 {
+		if err := os.Chown(path, uid, gid); err != nil {
+			return fmt.Errorf("restore pg_hba.conf ownership: %w\n"+
+				"the file is now root-owned and PostgreSQL may not start; "+
+				"restore it from %s and chown it back", err, backup)
+		}
+	}
 	return nil
+}
+
+// ownerOf returns path's owning uid and gid, or -1 if they can't be read.
+func ownerOf(path string) (uid, gid int) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return -1, -1
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return -1, -1
+	}
+	return int(st.Uid), int(st.Gid)
 }
 
 // passwordAuthMethod picks the pg_hba method matching how this server

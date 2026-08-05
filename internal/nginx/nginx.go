@@ -134,15 +134,29 @@ func BackupFile(path string) (string, error) {
 	return backup, nil
 }
 
+// Written records everything WriteConfig changed, so RestoreConfig can undo
+// it if the result turns out not to validate.
+type Written struct {
+	Path       string // config file that was written
+	Backup     string // previous contents; empty if the config file was new
+	Link       string // sites-enabled symlink touched; empty if none
+	LinkTarget string // what that symlink pointed at before; empty if it was new
+}
+
 // WriteConfig writes content to the appropriate config path, backs up any
-// existing file, and (on Debian-family systems) creates the sites-enabled symlink.
-func WriteConfig(cfg Config, content string) error {
+// existing file, and (on Debian-family systems) creates the sites-enabled
+// symlink. The returned Written lets the caller roll all of that back — an
+// invalid config left in place would stop nginx starting on the next reload
+// or reboot, long after the command that wrote it.
+func WriteConfig(cfg Config, content string) (Written, error) {
 	path := ConfigPath(cfg.OSInfo, cfg.Domains[0])
+	w := Written{Path: path}
 
 	backup, err := BackupFile(path)
 	if err != nil {
-		return err
+		return w, err
 	}
+	w.Backup = backup
 	if backup != "" {
 		fmt.Printf("  Backed up existing config → %s\n", backup)
 	}
@@ -150,27 +164,75 @@ func WriteConfig(cfg Config, content string) error {
 	// Atomic, so a reload can never pick up a half-written server block, and
 	// mode-preserving, so rewriting a config never changes its permissions.
 	if err := system.AtomicWriteFile(path, []byte(content), system.ModeOrDefault(path, 0644)); err != nil {
-		return fmt.Errorf("write config: %w", err)
+		return w, fmt.Errorf("write config: %w", err)
 	}
 	fmt.Printf("  Config written → %s\n", path)
 
 	if cfg.OSInfo.Family == system.Debian {
-		if err := enableSite(path, cfg.Domains[0]); err != nil {
-			return err
+		link, prevTarget, err := enableSite(path, cfg.Domains[0])
+		w.Link, w.LinkTarget = link, prevTarget
+		if err != nil {
+			return w, err
 		}
 	}
 
+	return w, nil
+}
+
+// RestoreConfig undoes WriteConfig. Used when `nginx -t` rejects the result,
+// so a run that fails validation leaves nothing behind.
+func RestoreConfig(w Written) error {
+	if w.Link != "" {
+		if err := os.Remove(w.Link); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove symlink %s: %w", w.Link, err)
+		}
+		// Put back whatever the symlink pointed at before, if anything.
+		if w.LinkTarget != "" {
+			if err := os.Symlink(w.LinkTarget, w.Link); err != nil {
+				return fmt.Errorf("restore symlink %s: %w", w.Link, err)
+			}
+		}
+	}
+
+	if w.Path == "" {
+		return nil
+	}
+
+	// No backup means the config file didn't exist before this run.
+	if w.Backup == "" {
+		if err := os.Remove(w.Path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", w.Path, err)
+		}
+		return nil
+	}
+
+	data, err := os.ReadFile(w.Backup)
+	if err != nil {
+		return fmt.Errorf("read backup %s: %w", w.Backup, err)
+	}
+	if err := system.AtomicWriteFile(w.Path, data, system.ModeOrDefault(w.Backup, 0644)); err != nil {
+		return fmt.Errorf("restore %s: %w", w.Path, err)
+	}
 	return nil
 }
 
-func enableSite(configPath, domain string) error {
-	linkPath := filepath.Join("/etc/nginx/sites-enabled", domain+".conf")
-	os.Remove(linkPath) // remove stale symlink if any
-	if err := os.Symlink(configPath, linkPath); err != nil {
-		return fmt.Errorf("enable site (symlink): %w", err)
+// enableSite points sites-enabled at the config, returning the link path and
+// whatever it pointed at before so the change can be reversed.
+func enableSite(configPath, domain string) (link, prevTarget string, err error) {
+	link = filepath.Join("/etc/nginx/sites-enabled", domain+".conf")
+
+	if target, err := os.Readlink(link); err == nil {
+		prevTarget = target
 	}
-	fmt.Printf("  Site enabled → %s\n", linkPath)
-	return nil
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return link, prevTarget, fmt.Errorf("replace symlink %s: %w", link, err)
+	}
+
+	if err := os.Symlink(configPath, link); err != nil {
+		return link, prevTarget, fmt.Errorf("enable site (symlink): %w", err)
+	}
+	fmt.Printf("  Site enabled → %s\n", link)
+	return link, prevTarget, nil
 }
 
 // Test runs `nginx -t` and returns the combined output on failure.

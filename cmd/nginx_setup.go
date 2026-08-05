@@ -129,12 +129,25 @@ func runNginxSetup(cmd *cobra.Command, _ []string) error {
 	}
 
 	// ── write, test, reload ────────────────────────────────────────────────
-	if err := nginxpkg.WriteConfig(cfg, content); err != nil {
+	written, err := nginxpkg.WriteConfig(cfg, content)
+	if err != nil {
+		// Partially applied — undo whatever did land.
+		if restoreErr := nginxpkg.RestoreConfig(written); restoreErr != nil {
+			return fmt.Errorf("%w\n\nROLLBACK ALSO FAILED: %v", err, restoreErr)
+		}
 		return err
 	}
 
 	fmt.Println("\nTesting nginx configuration...")
 	if err := nginxpkg.Test(); err != nil {
+		// An invalid config left on disk would stop nginx starting at the
+		// next reload or reboot, long after this command finished.
+		fmt.Println("✗ Validation failed — rolling back.")
+		if restoreErr := nginxpkg.RestoreConfig(written); restoreErr != nil {
+			return fmt.Errorf("%w\n\nROLLBACK ALSO FAILED: %v\nFix %s by hand before reloading nginx",
+				err, restoreErr, written.Path)
+		}
+		fmt.Println("✓ Rolled back — nginx was never reloaded, so nothing changed.")
 		return err
 	}
 

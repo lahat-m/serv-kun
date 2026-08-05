@@ -86,16 +86,17 @@ func Configure(b Backend, rules []Rule) error {
 	return fmt.Errorf("unsupported firewall backend %q", b)
 }
 
-// configureUFW sets policy and allows *before* enabling, because
-// `ufw enable` applies default-deny the moment it runs.
+// configureUFW adds the allow rules first, then sets the default policy, then
+// enables.
+//
+// The order matters in both directions. `ufw default deny incoming` takes
+// effect immediately on an already-active firewall, so setting the policy
+// first opens a window where new inbound connections — including SSH — are
+// refused; an interrupt in that window leaves deny-all with no way back in.
+// (An in-flight session survives either way, via ufw's RELATED,ESTABLISHED
+// rule in before.rules.) And `ufw enable` applies the policy the moment it
+// runs, so it has to come last, after the allows are in place.
 func configureUFW(rules []Rule) error {
-	if err := system.RunCmd("ufw", "default", "deny", "incoming"); err != nil {
-		return fmt.Errorf("ufw default deny incoming: %w", err)
-	}
-	if err := system.RunCmd("ufw", "default", "allow", "outgoing"); err != nil {
-		return fmt.Errorf("ufw default allow outgoing: %w", err)
-	}
-
 	for _, r := range rules {
 		args := []string{"allow", r.spec()}
 		if r.Comment != "" {
@@ -104,6 +105,13 @@ func configureUFW(rules []Rule) error {
 		if err := system.RunCmd("ufw", args...); err != nil {
 			return fmt.Errorf("ufw allow %s: %w", r.spec(), err)
 		}
+	}
+
+	if err := system.RunCmd("ufw", "default", "deny", "incoming"); err != nil {
+		return fmt.Errorf("ufw default deny incoming: %w", err)
+	}
+	if err := system.RunCmd("ufw", "default", "allow", "outgoing"); err != nil {
+		return fmt.Errorf("ufw default allow outgoing: %w", err)
 	}
 
 	// --force skips ufw's interactive "may disrupt existing ssh connections"

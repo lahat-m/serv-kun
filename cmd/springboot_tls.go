@@ -52,6 +52,17 @@ rm -rf "/etc/letsencrypt/live/$1" "/etc/letsencrypt/archive/$1" "/etc/letsencryp
 		certbotArgs = append(certbotArgs, "--register-unsafely-without-email")
 	}
 	if err := proj.Run(certbotArgs...); err != nil {
+		// The dummy certificate was deleted to make way for the real one, so
+		// a failure here leaves nginx with no certificate at all — it would
+		// fail to start on the next restart, taking the site down over and
+		// above the failed issuance. Put a throwaway one back.
+		fmt.Println("\nCertificate issuance failed — restoring a placeholder so nginx can still start.")
+		if restoreErr := proj.Run("run", "--rm", "--entrypoint", "sh", "certbot", "-c", dummyScript, "sh", domain); restoreErr != nil {
+			return fmt.Errorf("%w\n\nnginx now has no certificate for %s and will not start; "+
+				"re-run 'serv-kun springboot setup' to rebuild it (restore also failed: %v)",
+				err, domain, restoreErr)
+		}
+		fmt.Println("✓ Placeholder restored — nginx will start, but serves an invalid certificate until issuance succeeds.")
 		return fmt.Errorf("request certificate: %w", err)
 	}
 
