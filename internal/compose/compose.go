@@ -48,14 +48,20 @@ func (p Project) Output(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// ContainerID returns the running container ID for a compose service.
+// ContainerID returns the container ID for a compose service, including one
+// that has already exited or is crash-looping. Stopped containers count on
+// purpose: the reason to look up an ID at all is usually to recover what a
+// *failed* container was started from, and -q alone would skip exactly that
+// case. Compose keeps one container per service unless it was scaled, so the
+// first line is normally the only line.
 func (p Project) ContainerID(service string) (string, error) {
-	id, err := p.Output("ps", "-q", service)
+	out, err := p.Output("ps", "-aq", service)
 	if err != nil {
-		return "", fmt.Errorf("compose ps -q %s: %w\n%s", service, err, id)
+		return "", fmt.Errorf("compose ps -aq %s: %w\n%s", service, err, out)
 	}
+	id := strings.SplitN(out, "\n", 2)[0]
 	if id == "" {
-		return "", fmt.Errorf("service %q has no running container", service)
+		return "", fmt.Errorf("service %q has no container", service)
 	}
 	return id, nil
 }
@@ -67,6 +73,18 @@ func ImageID(containerID string) (string, error) {
 	out, err := exec.Command("docker", "inspect", "--format", "{{.Image}}", containerID).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("docker inspect %s: %w\n%s", containerID, err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// LocalImageID returns the image ID that a local image reference currently
+// resolves to. Comparing it against the ID a container was started from is
+// what separates "the pull brought a new build" from "the tag hasn't moved" —
+// and in the latter case there is no earlier image to roll back to.
+func LocalImageID(imageRef string) (string, error) {
+	out, err := exec.Command("docker", "image", "inspect", "--format", "{{.Id}}", imageRef).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker image inspect %s: %w\n%s", imageRef, err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
