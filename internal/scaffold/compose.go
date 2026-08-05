@@ -98,10 +98,17 @@ services:
     # nginx reads certificates into memory at startup, so certbot renewing
     # them on disk is not enough on its own — without this reload loop nginx
     # would keep serving the old certificate until it expired, roughly 90
-    # days after the first deploy. The official entrypoint still runs first
-    # (it renders the envsubst templates), then execs this.
+    # days after the first deploy.
+    #
+    # /docker-entrypoint.sh must be invoked explicitly. The nginx image only
+    # runs its /docker-entrypoint.d/ scripts — which include the envsubst pass
+    # that renders templates/ into conf.d/ — when the command starts with
+    # "nginx". Overriding command with a shell skips that silently: nginx then
+    # serves only its default site, the ACME challenge location doesn't exist,
+    # and certificate issuance fails with a 404 on /.well-known/acme-challenge/.
+    # exec keeps nginx as PID 1 so it still receives signals directly.
     command: >
-      /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g 'daemon off;'"
+      /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec /docker-entrypoint.sh nginx -g 'daemon off;'"
     volumes:
       - ./nginx/templates:/etc/nginx/templates:ro
       - ./nginx/conf.d/hardening.conf:/etc/nginx/conf.d/hardening.conf:ro

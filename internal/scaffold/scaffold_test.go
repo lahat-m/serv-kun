@@ -61,6 +61,12 @@ func TestComposeUsesAppNameAndPort(t *testing.T) {
 	compose := fileContent(t, files, "docker-compose.prod.yml")
 
 	for _, want := range []string{
+		// The nginx image only runs its /docker-entrypoint.d/ scripts — the
+		// envsubst pass that renders templates/ into conf.d/ — when the command
+		// starts with "nginx". The cert-reload loop overrides command with a
+		// shell, so the entrypoint has to be invoked explicitly; without it
+		// nginx serves only its default site and ACME challenges 404.
+		"exec /docker-entrypoint.sh nginx -g 'daemon off;'",
 		"container_name: myapp-app",
 		"container_name: myapp-db",
 		"container_name: myapp-nginx",
