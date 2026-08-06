@@ -49,3 +49,20 @@ func Generate(dir string) (err error) {
 	}
 	return nil
 }
+
+// GrantUser hands dir and the keypair to uid/gid — the account the app
+// container runs as. Generation leaves everything root-owned, which an image
+// with a non-root USER can see but not open: the app then dies at startup on
+// its own signing key.
+//
+// Ownership moves, permissions don't. dir stays 0700 and private.pem 0600, so
+// widening access to one container user doesn't widen it to every account on
+// the host.
+func GrantUser(dir string, uid, gid int) error {
+	for _, path := range []string{dir, filepath.Join(dir, "private.pem"), filepath.Join(dir, "public.pem")} {
+		if err := os.Chown(path, uid, gid); err != nil {
+			return fmt.Errorf("chown %s to %d:%d: %w", path, uid, gid, err)
+		}
+	}
+	return nil
+}

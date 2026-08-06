@@ -74,6 +74,12 @@ func runSpringbootDeploy(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// The image that just arrived may not run as the user the one before it
+	// did — a base image bump is enough to renumber it — and certs/ is still
+	// owned by the old uid. Reassert ownership against the image about to run,
+	// before it gets a chance to crash-loop on a key it cannot open.
+	ensureCertsReadable(proj, appImage)
+
 	// --force-recreate so this always replaces the container. Without it,
 	// compose leaves a service whose image and config are both unchanged
 	// alone and prints "Container <name> Running", which reads as a completed
@@ -115,6 +121,11 @@ func runSpringbootDeploy(cmd *cobra.Command, _ []string) error {
 	if err := compose.Tag(oldImageID, appImage); err != nil {
 		return fmt.Errorf("retag previous image: %w", err)
 	}
+	// Hand certs/ back to the user the *old* image runs as. Skipping this
+	// breaks rollback in precisely the case that needs it most: a deploy whose
+	// new image renumbered its user, where the chown above has since pointed
+	// the keys at a uid the image being restored doesn't have.
+	ensureCertsReadable(proj, oldImageID)
 	if err := proj.Run("up", "-d", "--no-deps", "--force-recreate", "app"); err != nil {
 		return fmt.Errorf("recreate with previous image: %w", err)
 	}

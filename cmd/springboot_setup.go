@@ -304,9 +304,9 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 		}
 		// certs/ is 0700 and private.pem 0600, both root-owned. If the image's
 		// Dockerfile sets a non-root USER, the app cannot read its own signing
-		// key and dies at startup on a file it can see but not open.
-		fmt.Println("  Note: keys are root-only. If your Dockerfile sets a non-root USER,")
-		fmt.Println("  grant that UID read access, e.g.  sudo chown -R <uid>:<gid> certs/")
+		// key and dies at startup on a file it can see but not open. Handing
+		// certs/ to that user needs the image, which doesn't exist until the
+		// TLS bootstrap below pulls or builds it — see ensureCertsReadable.
 		fmt.Println()
 	}
 
@@ -348,6 +348,19 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 	// ── TLS bootstrap (dummy cert → real cert → reload), then bring up the stack ──
 	if err := bootstrapTLS(proj, basics.AppDomain, basics.CertbotEmail); err != nil {
 		return fmt.Errorf("TLS bootstrap: %w", err)
+	}
+
+	// The TLS bootstrap is what pulls or builds the app image, so this is the
+	// first point at which there is an image to read a USER out of. The app it
+	// started has been crash-looping on the unreadable key ever since;
+	// restarting clears the backoff it accumulated so the health check below
+	// waits on a live boot rather than on Docker's next retry.
+	if ensureCertsReadable(proj, appImageRef(proj, answers.AppImage)) {
+		if _, err := proj.ContainerID("app"); err == nil {
+			if err := proj.Run("restart", "app"); err != nil {
+				fmt.Printf("! restart app: %v\n", err)
+			}
+		}
 	}
 
 	fmt.Println("\nStarting the full stack...")

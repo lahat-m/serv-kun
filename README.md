@@ -228,11 +228,16 @@ sudo serv-kun springboot setup
 | Does this app use S3-compatible object storage? | `No` | `Yes` needs endpoint, access key, secret key, bucket, region. |
 | Proceed? | `Yes` | Review the summary — domain, image and DB name are the easy typos. |
 
-> **If your JWT keys live in `certs/`, check the container can read them.**
+> **JWT keys in `certs/` are handed to the container's user for you.**
 > The wizard writes `certs/` as `0700` and `private.pem` as `0600`, both owned
-> by root. If your `Dockerfile` sets a non-root `USER`, the app can see the key
-> and not open it, and dies at startup. `sudo chown -R <uid>:<gid> certs/`
-> using the container's UID fixes it; the wizard prints this reminder too.
+> by root — which an image with a non-root `USER` can see but not open, killing
+> the app at startup on its own signing key. Once the image exists, setup
+> resolves the numeric UID that `USER` stands for and chowns `certs/` to it,
+> reporting `✓ certs/ handed to 1001:1001`. Permissions are untouched: the keys
+> become readable to that one container user, not to the host at large. On an
+> image whose `USER` can't be resolved — a name, with no `id(1)` to resolve it
+> against, as in a distroless base — setup says so and prints the
+> `sudo chown -R <uid>:<gid> certs/` to run by hand.
 
 A **proxied Cloudflare record** (orange cloud) is recognised and reported as
 `→ Cloudflare edge (proxied)` rather than a failure — the HTTP-01 challenge
@@ -496,6 +501,13 @@ its `/actuator/health` check, it automatically re-tags that ID back onto the
 image reference and recreates the container again, so a bad deploy doesn't
 leave the site down. A rollback still exits non-zero — the deploy failed and
 needs investigating even though the site recovered.
+
+If the project mounts a keypair from `certs/`, ownership of it is reasserted
+against the image that is about to run — on the way out *and* on the way back.
+An image that renumbers its user (a base-image bump is enough) would otherwise
+crash-loop on keys chowned for its predecessor; and once the new uid owns them,
+a rollback to the earlier image would fail on the same keys, taking down the
+one mechanism there to catch a bad deploy.
 
 The container is always recreated, even when the image and config are
 unchanged. Left to itself `docker compose up` skips such a service and
