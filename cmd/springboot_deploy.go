@@ -28,6 +28,11 @@ func runSpringbootDeploy(cmd *cobra.Command, _ []string) error {
 
 	proj := projectFromFlags(cmd)
 
+	// A shared project name is worth repeating on every deploy, not just at
+	// setup: the dev compose file that collides with this one is usually added
+	// to the repo long after the stack was first brought up.
+	warnProjectNameCollision(proj)
+
 	envPath := filepath.Join(proj.Dir, proj.EnvFile)
 	env, err := envfile.Read(envPath)
 	if err != nil {

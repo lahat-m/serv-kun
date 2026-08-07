@@ -11,6 +11,25 @@ func testParams() Params {
 		AppPort:      "8080",
 		MaxBodySize:  "50M",
 		IncludeCerts: true,
+		ProjectName:  "myapp-prod",
+	}
+}
+
+// The name has to be a top-level key — at column 0 — or compose treats it as
+// part of whatever block precedes it and silently falls back to the directory
+// name, which is the default this exists to escape.
+func TestComposeDeclaresProjectNameAtTopLevel(t *testing.T) {
+	files, err := Generate(testParams())
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	compose := files[0].Content
+
+	if !strings.Contains(compose, "\nname: myapp-prod\n") {
+		t.Errorf("compose file has no top-level name: key\n---\n%s", compose)
+	}
+	if strings.Index(compose, "\nname: myapp-prod\n") > strings.Index(compose, "\nservices:") {
+		t.Errorf("name: must come before services:\n---\n%s", compose)
 	}
 }
 

@@ -5,6 +5,12 @@
 // init` instead of copy-pasting another project's files.
 package scaffold
 
+// ComposeFile is the path Generate writes the production compose file to.
+// Named because callers need to single it out: it is the one generated file
+// whose project name, once a stack is running under it, cannot be changed
+// without stranding the stack's volumes.
+const ComposeFile = "docker-compose.prod.yml"
+
 // File is one generated file, relative to the project root.
 type File struct {
 	Path    string
@@ -28,7 +34,7 @@ func Generate(p Params) ([]File, error) {
 	}
 
 	return []File{
-		{Path: "docker-compose.prod.yml", Content: compose},
+		{Path: ComposeFile, Content: compose},
 		{Path: "nginx/templates/app.conf.template", Content: nginxConf},
 		{Path: "nginx/conf.d/hardening.conf", Content: HardeningConf},
 		{Path: "scripts/backup-postgres.sh", Content: BackupScript, Exec: true},

@@ -62,6 +62,11 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("%s not found — run this from the project directory, or pass --dir", composePath)
 	}
 
+	// Said before anything is asked or written: if this stack shares a project
+	// name with another compose file here, that is the first thing to fix, and
+	// the operator should hear it while backing out is still free.
+	warnProjectNameCollision(proj)
+
 	// ── Docker ──────────────────────────────────────────────────────────────
 	if !docker.IsInstalled() {
 		var install bool

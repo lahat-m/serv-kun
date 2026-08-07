@@ -503,9 +503,34 @@ anything that already exists, keeping a timestamped backup either way. You
 still need to add your own `Dockerfile` — that's build-specific enough per
 project that it isn't scaffolded.
 
+The generated compose file names its own project — `name: <directory>-prod`
+at the top. Left to default, compose names a project after the directory it
+sits in, so a production stack and a dev `docker-compose.yml` in the same
+repo end up sharing one container namespace. Compose then matches containers
+by project and service name rather than by `container_name`, and an ordinary
+`docker compose up -d` against the dev file recreates the *production*
+database container as if it were its own; `--remove-orphans` deletes the rest
+of the stack. Declaring the name in the file rather than passing `-p` means
+hand-typed `docker compose -f docker-compose.prod.yml` commands get it too,
+which matters — those are the ones that do the damage.
+
+Pick that name before the first `up` and leave it. The project name prefixes
+every volume, so changing it later points the stack at `<newname>_postgres-data`,
+starts it on an empty database, and strands the real one under the old prefix.
+`init` warns before overwriting a compose file that is already running under a
+different name.
+
 ```bash
 sudo serv-kun springboot setup
 ```
+
+Both `setup` and `deploy` check first for another compose file in the same
+directory that resolves to the same project name — the collision described
+above — and name it, along with the services the two files have in common,
+before doing anything else. They only report it. The obvious repair is to
+rename this project, and that is the one thing not to do blindly: the fix
+belongs on the *other* stack, whose volumes are usually disposable. Existing
+deployments predate the generated `name:` key, so this is how they find out.
 
 Installs Docker if it isn't already present, then prompts for the fields
 every such project needs (domain, image, Postgres credentials, CORS origin).

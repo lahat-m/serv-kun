@@ -12,6 +12,7 @@ type Params struct {
 	AppPort      string // port the app listens on inside its container (e.g. "8080")
 	MaxBodySize  string // nginx client_max_body_size, e.g. "50M" — should match the app's multipart max-request-size
 	IncludeCerts bool   // mount ./certs into the app container (for RS256 JWT keys)
+	ProjectName  string // compose project name, written as the file's top-level name: key
 }
 
 const composeTemplate = `# =============================================================
@@ -27,6 +28,21 @@ const composeTemplate = `# =====================================================
 #
 # Usage: sudo serv-kun springboot setup
 # =============================================================
+
+# The compose project name, set here rather than left to default.
+#
+# Without it compose names the project after this directory — the same name a
+# dev docker-compose.yml beside this file would get — and the two stacks then
+# share one container namespace. Compose matches containers by project and
+# service name, not by container_name, so "docker compose up" against the dev
+# file recreates *these* containers as if they were its own, and
+# --remove-orphans deletes the rest of the stack.
+#
+# Change it only before the first "up". The project name prefixes every
+# volume ({{.ProjectName}}_postgres-data and the rest), so renaming it later
+# leaves the existing data behind and starts the stack on empty volumes.
+name: {{.ProjectName}}
+
 services:
 
   app:
