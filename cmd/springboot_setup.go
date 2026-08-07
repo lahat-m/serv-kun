@@ -230,6 +230,19 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Println()
 
+	// ── what this particular project needs on top of the template ──────────
+	// Asked before the summary so an operator who abandons the wizard here has
+	// still had every question put to them, and nothing has been written.
+	preview, err := envfile.Generate(answers)
+	if err != nil {
+		return err
+	}
+	extra, err := askProjectRequirements(proj, envfile.Keys(preview))
+	if err != nil {
+		return err
+	}
+	answers.Extra = extra
+
 	// ── confirm before touching anything ────────────────────────────────────
 	// Secrets are deliberately left out of this summary — it's a sanity check
 	// on the settings that are easy to typo (domain, image, db name), not a
@@ -245,6 +258,13 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 	}
 	if answers.HasObjectStorage {
 		fmt.Printf("  S3 bucket:     %s (%s)\n", answers.S3Bucket, answers.S3Region)
+	}
+	if len(answers.Extra) > 0 {
+		names := make([]string, 0, len(answers.Extra))
+		for _, kv := range answers.Extra {
+			names = append(names, kv.Key)
+		}
+		fmt.Printf("  Project vars:  %s\n", strings.Join(names, ", "))
 	}
 	printRule()
 	fmt.Println()
@@ -267,18 +287,31 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	content, err := envfile.Generate(answers)
-	if err != nil {
-		return err
-	}
-
 	envPath := filepath.Join(proj.Dir, proj.EnvFile)
 	if _, err := os.Stat(envPath); err == nil {
+		// Read the outgoing file before renaming it away. Anything it defines
+		// that this run doesn't write is carried across: a re-run would
+		// otherwise drop hand-added variables into a backup nobody reads, and
+		// the app would fail on a value that was there five minutes ago.
+		generated, err := envfile.Generate(answers)
+		if err != nil {
+			return err
+		}
+		answers.Carried = carriedOver(envPath, envfile.Keys(generated))
+		for _, kv := range answers.Carried {
+			fmt.Printf("Carrying over %s from the existing %s\n", kv.Key, proj.EnvFile)
+		}
+
 		backup := envPath + ".bak." + time.Now().Format("20060102-150405")
 		if err := os.Rename(envPath, backup); err != nil {
 			return fmt.Errorf("back up existing %s: %w", proj.EnvFile, err)
 		}
 		fmt.Printf("Backed up existing %s → %s\n", proj.EnvFile, backup)
+	}
+
+	content, err := envfile.Generate(answers)
+	if err != nil {
+		return err
 	}
 
 	// 0600: this file holds real secrets (DB password, JWT paths, API keys).

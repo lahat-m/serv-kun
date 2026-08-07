@@ -226,7 +226,36 @@ sudo serv-kun springboot setup
 | → Seeded admin email / password / full name | `admin@kuniel.com` / *(generated)* / `Admin` | Change the password after first login. |
 | Does this app send email via Resend? | `No` | `Yes` needs an API key and a verified sender domain. |
 | Does this app use S3-compatible object storage? | `No` | `Yes` needs endpoint, access key, secret key, bucket, region. |
+| *(project-specific variables)* | *(varies)* | Asked only when this project needs them — see below. |
 | Proceed? | `Yes` | Review the summary — domain, image and DB name are the easy typos. |
+
+> **The wizard asks what your project's own configuration requires.**
+> The questions above produce a fixed set of variable names, which is only ever
+> right for the project they were modelled on. Before writing anything, setup
+> reads `src/main/resources/application.properties` and
+> `application-prod.properties` for every property that resolves from an
+> environment variable *with no fallback*, and asks for the ones the generated
+> file wouldn't cover — using the comment above each property as the prompt's
+> help text.
+>
+> It counts a property as covered if the file defines either the variable the
+> author named **or** the property's own relaxed-binding name, because Spring
+> accepts both and the environment outranks the properties file. That's why a
+> project reading `${JWT_PUBLIC_KEY_PATH}` is silently satisfied by the
+> `JWT_PUBLIC_KEY` this wizard writes, and isn't asked about — while
+> `app.storage.endpoint=${S3_ENDPOINT}` is not covered by `APP_S3_ENDPOINT`
+> (that maps to `app.s3.endpoint`) and *is* asked for. Without the distinction
+> the check would flag eight satisfied variables next to every real one and
+> quickly become noise.
+>
+> A blank answer is allowed and warned about: the app will see the literal
+> `${VAR}` and fail on it. A project deployed from a published image, with no
+> sources on the box, is skipped silently; one configured through YAML is
+> skipped with a note, since that isn't parsed yet.
+>
+> **Re-running setup no longer discards variables it didn't write.** Anything
+> the previous `.env.prod` defined that the new one doesn't is carried across
+> and reported, rather than surviving only in the timestamped backup.
 
 > **JWT keys in `certs/` are handed to the container's user for you.**
 > The wizard writes `certs/` as `0700` and `private.pem` as `0600`, both owned

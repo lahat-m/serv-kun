@@ -66,6 +66,63 @@ func TestGenerateContainsAllFieldsWhenEnabled(t *testing.T) {
 	}
 }
 
+// Project-specific variables and carried-over ones have to survive the same
+// round trip as everything else: quoted on the way out, readable on the way
+// back, and in a fixed order so re-running the wizard on the same answers
+// doesn't churn the file.
+func TestGenerateWritesExtraAndCarriedKeys(t *testing.T) {
+	a := testAnswers()
+	a.Extra = []KV{
+		{Key: "CARD_HMAC_KEY", Value: "egbglfidQ6qOLVT96/K7rEcJS1c+YJWoN9RP99WFd1w="},
+		{Key: "S3_ENDPOINT", Value: "https://nbg1.your-objectstorage.com"},
+	}
+	a.Carried = []KV{{Key: "LEGACY_TOKEN", Value: "kept$afe"}}
+
+	content, err := Generate(a)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	keys := Keys(content)
+	for _, want := range []string{"CARD_HMAC_KEY", "S3_ENDPOINT", "LEGACY_TOKEN"} {
+		if !keys[want] {
+			t.Errorf("Keys() missing %q\n---\n%s", want, content)
+		}
+	}
+
+	// Whole lines: "S3_ENDPOINT" is also a substring of the APP_S3_ENDPOINT
+	// the object-storage section writes further up the file.
+	if strings.Index(content, "\nCARD_HMAC_KEY=") > strings.Index(content, "\nS3_ENDPOINT=") {
+		t.Errorf("Extra keys came out in a different order than they were given\n---\n%s", content)
+	}
+
+	path := filepath.Join(t.TempDir(), ".env.prod")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	read, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if read["CARD_HMAC_KEY"] != a.Extra[0].Value {
+		t.Errorf("CARD_HMAC_KEY round-tripped as %q, want %q", read["CARD_HMAC_KEY"], a.Extra[0].Value)
+	}
+	if read["LEGACY_TOKEN"] != "kept$afe" {
+		t.Errorf("carried value round-tripped as %q, want %q", read["LEGACY_TOKEN"], "kept$afe")
+	}
+}
+
+func TestKeysIgnoresCommentsAndBlankLines(t *testing.T) {
+	keys := Keys("# --- section ---\n\nAPP_DOMAIN=\"x.com\"\n  SPACED = \"y\"\nnot a pair\n")
+
+	if !keys["APP_DOMAIN"] || !keys["SPACED"] {
+		t.Errorf("Keys() = %v, want APP_DOMAIN and SPACED", keys)
+	}
+	if len(keys) != 2 {
+		t.Errorf("Keys() = %v, want exactly 2 entries", keys)
+	}
+}
+
 func TestGenerateOmitsDisabledSections(t *testing.T) {
 	a := testAnswers()
 	a.HasJWT = false
