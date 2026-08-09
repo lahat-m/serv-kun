@@ -33,6 +33,39 @@ func TestComposeDeclaresProjectNameAtTopLevel(t *testing.T) {
 	}
 }
 
+// Every line here was a real deploy failure before it was a test. An unset
+// secret becomes an empty string rather than an error, so the job hands
+// ssh-action a blank host; without set -e a failed deploy runs on to the next
+// command and the job can still exit 0; an unquoted empty app dir turns `cd`
+// into "go to the login directory" and deploys from the wrong place; and the
+// prune ran unprivileged against a socket the deploy user cannot open.
+func TestDeployWorkflowFailsLoudlyRatherThanQuietly(t *testing.T) {
+	for _, want := range []string{
+		"Check the deploy secrets are present",
+		"::error::Deploy secrets not set:",
+		"set -e",
+		`cd "${{ secrets.HETZNER_APP_DIR }}"`,
+		"sudo serv-kun springboot deploy",
+		"sudo docker image prune -f",
+	} {
+		if !strings.Contains(DeployWorkflow, want) {
+			t.Errorf("deploy workflow is missing %q", want)
+		}
+	}
+
+	// The guard is worth nothing after the step it guards.
+	if strings.Index(DeployWorkflow, "Check the deploy secrets are present") >
+		strings.Index(DeployWorkflow, "Deploy over SSH") {
+		t.Error("the secrets check must come before the SSH step")
+	}
+
+	// `set -e` has to be the first line of the script, not merely present.
+	script := DeployWorkflow[strings.Index(DeployWorkflow, "script: |"):]
+	if first := strings.TrimSpace(strings.Split(script, "\n")[1]); first != "set -e" {
+		t.Errorf("first line of the deploy script is %q, want \"set -e\"", first)
+	}
+}
+
 func TestGenerateReturnsAllFiles(t *testing.T) {
 	files, err := Generate(testParams())
 	if err != nil {

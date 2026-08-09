@@ -19,6 +19,7 @@ Commands:
   nginx setup       Install nginx, write a reverse-proxy config, optionally add SSL
   nginx ssl         Add SSL to an existing nginx config via Let's Encrypt
   user              Create a Linux user with sudo privileges
+  ci                Grant the deploy user passwordless sudo for the commands CI runs
   ssh harden        Disable root login and password auth, with a lockout safety check
   firewall          Default-deny inbound firewall allowing SSH, HTTP and HTTPS
   postgres setup    Install PostgreSQL and create a deployment role and database
@@ -90,7 +91,7 @@ func init() {
 	sshCmd.AddCommand(sshHardenCmd)
 	postgresCmd.AddCommand(postgresSetupCmd, postgresBackupCmd, postgresRestoreCmd)
 	springbootCmd.AddCommand(springbootInitCmd, springbootSetupCmd, springbootDeployCmd, springbootStatusCmd, springbootLogsCmd)
-	rootCmd.AddCommand(nginxCmd, userCmd, sshCmd, firewallCmd, postgresCmd, nodeCmd, springbootCmd)
+	rootCmd.AddCommand(nginxCmd, userCmd, ciCmd, sshCmd, firewallCmd, postgresCmd, nodeCmd, springbootCmd)
 }
 
 // requireRoot exits with an actionable error if the current process isn't root.

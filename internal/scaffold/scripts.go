@@ -111,15 +111,48 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
+      # A secret that isn't set is substituted as an empty string, silently.
+      # The job then hands ssh-action a blank host and dies inside drone-ssh
+      # with "missing server host", which names neither the secret nor the
+      # three others that are just as likely to be blank. A missing
+      # HETZNER_APP_DIR on its own is worse than a failure: SSH still
+      # authenticates, and the deploy runs wherever the login lands.
+      - name: Check the deploy secrets are present
+        env:
+          HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
+          HETZNER_SSH_USER: ${{ secrets.HETZNER_SSH_USER }}
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+          HETZNER_APP_DIR: ${{ secrets.HETZNER_APP_DIR }}
+        run: |
+          missing=
+          for name in HETZNER_HOST HETZNER_SSH_USER HETZNER_SSH_KEY HETZNER_APP_DIR; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Deploy secrets not set:$missing"
+            echo "Add them under Settings > Secrets and variables > Actions > Repository secrets."
+            echo "If they already exist as Environment secrets, this job also needs an"
+            echo "'environment:' key naming that environment, or it cannot see them."
+            exit 1
+          fi
+          echo "All four deploy secrets are set."
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_SSH_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
+          # set -e: without it a failed deploy runs on to the next line and the
+          # job can still exit 0. Quoted cd: an empty HETZNER_APP_DIR must stop
+          # here, not deploy from the login directory. sudo on the prune: the
+          # deploy user is not in the docker group, and should not be — that
+          # group is passwordless root. ` + "`serv-kun ci`" + ` grants this exact
+          # command and no other.
           script: |
-            cd ${{ secrets.HETZNER_APP_DIR }}
+            set -e
+            cd "${{ secrets.HETZNER_APP_DIR }}"
             git pull --ff-only
             sudo serv-kun springboot deploy
-            docker image prune -f
+            sudo docker image prune -f
 `

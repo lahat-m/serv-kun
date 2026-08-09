@@ -53,11 +53,30 @@ container, health-checks it, and **automatically rolls back** to the
 previous image if the new one fails its health check. Set these repo
 secrets:
 
-- ` + "`HETZNER_HOST`" + ` — server IP or hostname
-- ` + "`HETZNER_SSH_USER`" + ` — e.g. ` + "`deploy`" + ` (needs passwordless sudo, or use ` + "`root`" + `)
-- ` + "`HETZNER_SSH_KEY`" + ` — private key for that user (add the matching public key
-  to the server's ` + "`~/.ssh/authorized_keys`" + `)
+- ` + "`HETZNER_HOST`" + ` — server IP. Prefer the IP over a hostname: a name
+  proxied through Cloudflare resolves to Cloudflare's edge, and SSH never
+  reaches the server.
+- ` + "`HETZNER_SSH_USER`" + ` — e.g. ` + "`deploy`" + `
+- ` + "`HETZNER_SSH_KEY`" + ` — private key for that user, whole file including the
+  ` + "`-----BEGIN`" + `/` + "`-----END`" + ` lines (add the matching public key to the
+  server's ` + "`~/.ssh/authorized_keys`" + `)
 - ` + "`HETZNER_APP_DIR`" + ` — e.g. ` + "`/opt/{{.AppName}}`" + `
+
+A secret you don't set is substituted as an empty string rather than failing,
+so the workflow checks all four before connecting and names any that are
+blank.
+
+Then, on the server, grant that user passwordless sudo for the two commands
+the deploy runs:
+
+` + "```" + `
+sudo serv-kun ci
+` + "```" + `
+
+Without it the deploy fails at ` + "`sudo`" + ` with *"a terminal is required to
+authenticate"* — an SSH session has no terminal for sudo to prompt on. The
+rule it writes covers ` + "`serv-kun`" + ` and ` + "`docker image prune -f`" + ` and
+nothing else; every other ` + "`sudo`" + ` still asks for a password.
 
 ## 5. Day-to-day operations
 

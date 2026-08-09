@@ -67,6 +67,11 @@ func runSpringbootSetup(cmd *cobra.Command, _ []string) error {
 	// the operator should hear it while backing out is still free.
 	warnProjectNameCollision(proj)
 
+	// Same reasoning, different failure: a scaffolded deploy workflow that
+	// can't sudo is only discovered by pushing, and reports it as a complaint
+	// about terminals from a machine nobody is watching.
+	warnMissingCIAccess(proj)
+
 	// ── Docker ──────────────────────────────────────────────────────────────
 	if !docker.IsInstalled() {
 		var install bool

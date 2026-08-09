@@ -287,17 +287,34 @@ In your GitHub repo, add these four secrets (Settings → Secrets and variables
 | `HETZNER_SSH_KEY` | contents of `~/.ssh/id_ed25519` (the **private** key) |
 | `HETZNER_APP_DIR` | `/opt/kuniel` |
 
-The workflow SSHes in and runs `sudo serv-kun springboot deploy`. That needs
-passwordless sudo for non-interactive use, so add it on the server:
+A secret you never set is substituted as an empty string rather than failing,
+so the workflow checks all four before it connects and names any that are
+blank. Without that check the first symptom is `missing server host` from deep
+inside the SSH action, which tells you neither which secret nor how many.
+
+The workflow SSHes in and runs `sudo serv-kun springboot deploy`. An SSH
+session has no terminal, so sudo has nowhere to prompt for a password and
+fails with *"a terminal is required to authenticate"*. Grant the deploy user
+passwordless sudo on the server:
 
 ```bash
-echo 'lahat ALL=(ALL) NOPASSWD: /usr/local/bin/serv-kun' | sudo tee /etc/sudoers.d/serv-kun
-sudo chmod 0440 /etc/sudoers.d/serv-kun
+sudo serv-kun ci
 ```
 
-Scoping `NOPASSWD` to just the `serv-kun` binary keeps the blast radius small
-— interactive `sudo` for everything else still asks for the password from
-step 3.
+It asks which user CI logs in as (defaulting to you), shows the rule before
+writing anything, validates it with `visudo` while it is still staged under a
+name sudo ignores, then installs it as `/etc/sudoers.d/serv-kun` and confirms
+with sudo that it took.
+
+The rule covers the `serv-kun` binary and `docker image prune -f` — the two
+commands the workflow actually runs — and nothing else. Interactive `sudo` for
+everything else still asks for the password from step 3. The docker entry pins
+its arguments deliberately: unrestricted `docker` is a root shell in one hop
+(`docker run -v /:/host`), which is also why the deploy user should not be in
+the `docker` group.
+
+> The rule is per-user. If `HETZNER_SSH_USER` holds a different account than
+> the one you answered here, it won't match and the deploy still fails.
 
 ### Step 11 — Day to day
 
@@ -363,6 +380,43 @@ key-only user can log in and then gets `sudo: a password is required` for
 every administrative command. The key authenticates SSH; the password
 authenticates `sudo`. Disabling password authentication later (`ssh harden`)
 doesn't undo this: it governs SSH login, not `sudo`.
+
+### ci — let CI deploy without a password prompt
+
+```bash
+sudo serv-kun ci
+```
+
+The workflow `springboot init` scaffolds SSHes in and runs `sudo serv-kun
+springboot deploy`. That session has no terminal, so sudo cannot prompt and
+the deploy dies with `sudo: a terminal is required to authenticate` — a
+message that names neither sudoers nor the user it means.
+
+This writes `/etc/sudoers.d/serv-kun` granting that user the two commands the
+deploy runs, without a password:
+
+- the `serv-kun` binary, with any arguments — its subcommands are the point
+- `docker image prune -f`, with those arguments exactly
+
+The docker entry is pinned because unrestricted `docker` is a larger grant
+than passwordless `serv-kun`: `docker run -v /:/host` is a root shell. For the
+same reason, don't put the deploy user in the `docker` group.
+
+Three details it handles that a hand-written rule usually doesn't:
+
+- **The file is validated before it can apply.** It's staged inside
+  `/etc/sudoers.d` under a name containing a dot, which sudo skips, and only
+  renamed into place once `visudo` accepts it. A malformed sudoers file that
+  sudo *does* read breaks `sudo` for everyone at once.
+- **The filename has no dot in it.** sudo ignores `serv-kun.conf` entirely —
+  the rule would be valid, root-owned, and inert.
+- **It asks sudo whether the rule took**, rather than trusting the write. A
+  rule can be installed and still not apply if something in `/etc/sudoers`
+  overrides it.
+
+`springboot setup` warns when it finds a scaffolded `deploy.yml` and the
+invoking user has no such rule, so this surfaces at setup rather than on the
+first push.
 
 ### ssh — disable root login and password authentication
 
