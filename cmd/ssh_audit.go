@@ -19,6 +19,11 @@ const (
 	sprayThreshold     = 10 // one account named from this many addresses
 	clusterThreshold   = 5  // addresses from a single /24 or /48
 	sustainedIntensity = 10 // attempts per address before a block is worth denying
+
+	// Rows the secondary tables truncate to. --top 0 lifts these along with
+	// the source list, so one flag means "show me everything".
+	subnetRows  = 5
+	accountRows = 8
 )
 
 var sshAuditCmd = &cobra.Command{
@@ -43,7 +48,7 @@ view of it looks like nothing at all.`,
 
 func init() {
 	sshAuditCmd.Flags().String("since", "24h", "how far back to look (e.g. 90m, 24h, 7d)")
-	sshAuditCmd.Flags().Int("top", 10, "how many source addresses to list")
+	sshAuditCmd.Flags().Int("top", 10, "how many source addresses to list (0 for all of them)")
 	sshAuditCmd.Flags().String("file", "", "read this log file instead of auto-detecting")
 }
 
@@ -80,8 +85,8 @@ func runSSHAudit(cmd *cobra.Command, _ []string) error {
 
 	printSummary(report)
 	printSources(report, top)
-	printSubnets(report)
-	printTargetedUsers(report)
+	printSubnets(report, top)
+	printTargetedUsers(report, top)
 	printLogins(report)
 	printAssessment(report, settings, settingsErr)
 
@@ -115,6 +120,10 @@ func printSources(r *sshd.Report, top int) {
 		return
 	}
 
+	// top <= 0 lists every address. A busy server has hundreds, so the
+	// default truncates — but the full list is what you need to build deny
+	// rules or to check whether one address appears at all, and a report that
+	// can only ever show ten is no use for either.
 	shown := r.Sources
 	if top > 0 && len(shown) > top {
 		shown = shown[:top]
@@ -131,11 +140,15 @@ func printSources(r *sshd.Report, top int) {
 			marker, s.IP, s.Failed, s.Probed, s.Accepted, summarizeUsers(s.Users, 5))
 	}
 
+	if hidden := len(r.Sources) - len(shown); hidden > 0 {
+		fmt.Printf("\n  %d more address(es) not shown — use --top 0 to list every one.\n", hidden)
+	}
+
 	// Volume alone doesn't say whether this is still going on. A run that
 	// stopped yesterday and one still in progress read identically in the
 	// table above, and they call for different responses.
 	if latest, ip := mostRecent(r.Sources); !latest.IsZero() {
-		fmt.Printf("\n  Most recent activity: %s (%s)\n", latest.Format(time.RFC3339), ip)
+		fmt.Printf("  Most recent activity: %s (%s)\n", latest.Format(time.RFC3339), ip)
 	}
 	fmt.Println()
 }
@@ -168,7 +181,7 @@ func summarizeUsers(users []string, limit int) string {
 // printSubnets shows network blocks holding several sources. One operator
 // renting a range looks like forty attackers in the per-address table and
 // like one line here, which is also the level at which it can be blocked.
-func printSubnets(r *sshd.Report) {
+func printSubnets(r *sshd.Report, top int) {
 	var clustered []sshd.Subnet
 	for _, s := range r.Subnets {
 		if s.Sources >= clusterThreshold {
@@ -178,8 +191,10 @@ func printSubnets(r *sshd.Report) {
 	if len(clustered) == 0 {
 		return
 	}
-	if len(clustered) > 5 {
-		clustered = clustered[:5]
+
+	total := len(clustered)
+	if top > 0 && total > subnetRows {
+		clustered = clustered[:subnetRows]
 	}
 
 	fmt.Println("Clustered network blocks")
@@ -187,20 +202,23 @@ func printSubnets(r *sshd.Report) {
 	for _, s := range clustered {
 		fmt.Printf("  %-24s %9d %10d %10.1f\n", s.CIDR, s.Sources, s.Attempts, s.Intensity())
 	}
+	if hidden := total - len(clustered); hidden > 0 {
+		fmt.Printf("  %d more block(s) not shown — use --top 0 to list every one.\n", hidden)
+	}
 	// Without this the two kinds of cluster read alike, and they call for
 	// opposite responses.
 	fmt.Println("  PER ADDR near 1 is an internet-wide sweep passing through, not an attack on you.")
 	fmt.Println()
 }
 
-func printTargetedUsers(r *sshd.Report) {
+func printTargetedUsers(r *sshd.Report, top int) {
 	if len(r.Usernames) == 0 {
 		return
 	}
 
 	shown := r.Usernames
-	if len(shown) > 8 {
-		shown = shown[:8]
+	if top > 0 && len(shown) > accountRows {
+		shown = shown[:accountRows]
 	}
 
 	// The address count is the column that separates one persistent bot from
@@ -214,6 +232,9 @@ func printTargetedUsers(r *sshd.Report) {
 			name = "(none named)"
 		}
 		fmt.Printf("  %-24s %9d %10d\n", name, u.Count, u.Sources)
+	}
+	if hidden := len(r.Usernames) - len(shown); hidden > 0 {
+		fmt.Printf("  %d more account(s) not shown — use --top 0 to list every one.\n", hidden)
 	}
 	fmt.Println()
 }

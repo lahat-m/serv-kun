@@ -480,8 +480,15 @@ you to verify login from a second terminal before closing the current one.
 ```bash
 sudo serv-kun ssh audit
 sudo serv-kun ssh audit --since 7d --top 20
+sudo serv-kun ssh audit --top 0            # every address, nothing truncated
 sudo serv-kun ssh audit --file /var/log/auth.log.1
 ```
+
+`--top 0` lifts the row limit on every table at once — sources, blocks and
+accounts — for when you want the full list rather than a summary, to build
+deny rules from or to check whether a particular address appears at all. A
+busy public server sees a four-figure number of addresses a week, so the
+default truncates and tells you how many it held back.
 
 Read-only. Reads the systemd journal (`-u ssh -u sshd`), falling back to
 `/var/log/auth.log` or `/var/log/secure`, and summarises the authentication
