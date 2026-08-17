@@ -6,8 +6,8 @@ config file editing required.
 
 - **nginx** — reverse proxy config + SSL via Let's Encrypt
 - **user** — create a Linux user with sudo privileges
-- **ssh** — disable root login and password auth, with a lockout safety check
-- **firewall** — default-deny inbound via ufw/firewalld, allowing SSH, HTTP and HTTPS
+- **ssh** — disable root login and password auth with a lockout safety check, and audit login attempts from the logs
+- **firewall** — default-deny inbound via ufw/firewalld, allowing SSH, HTTP and HTTPS, with optional SSH rate limiting and source allow-listing
 - **postgres** — install PostgreSQL, create a deployment role/database, and back up/restore
 - **node** — install Node.js via nvm for a user and pick a default version
 - **springboot** — set up and deploy a Dockerized Spring Boot app shaped like [Kuniel](https://github.com/lahat-m/kuniel)'s `docker-compose.prod.yml`
@@ -173,11 +173,19 @@ sudo serv-kun firewall
 | Prompt | Sample answer | What to use |
 |---|---|---|
 | ufw is not installed. Install it now? | `Yes` | |
+| Rate-limit inbound SSH on port 22? | `Yes` | Blocks a source IP that opens 6+ connections in 30 seconds. Answer `No` if CI deploys over SSH from one fixed address, or if your office shares a public IP behind NAT. |
+| Restrict SSH to specific source addresses? | `No` | Say `Yes` only if you can list every address that will ever need SSH — office, VPN, CI runner. It's the one control that stops a distributed attack, and the one that can lock you out. Your live sessions are checked against the list either way. |
 | Additional TCP ports to open | *(blank)* | Blank is right for this stack — nginx fronts everything on 80/443. Add app ports only if something bypasses nginx. |
 | Apply this firewall configuration? | `Yes` | Review the rule list first; the SSH port shown is read from the running sshd. |
 
 Don't open `5432` for Postgres. In this stack it isn't published to the host
 at all; if you need remote access, tunnel it: `ssh -L 5432:localhost:5432 lahat@203.0.113.10`.
+
+Once the server has been up for a day, check what's been knocking:
+
+```bash
+sudo serv-kun ssh audit
+```
 
 ### Step 7 — Scaffold the project (on your workstation)
 
@@ -418,7 +426,7 @@ Three details it handles that a hand-written rule usually doesn't:
 invoking user has no such rule, so this surfaces at setup rather than on the
 first push.
 
-### ssh — disable root login and password authentication
+### ssh harden — disable root login and password authentication
 
 ```bash
 sudo serv-kun ssh harden
@@ -467,6 +475,75 @@ On success it reloads (not restarts, so existing sessions survive), then
 re-reads the effective config to confirm the change actually took, and reminds
 you to verify login from a second terminal before closing the current one.
 
+### ssh audit — who has been trying to log in
+
+```bash
+sudo serv-kun ssh audit
+sudo serv-kun ssh audit --since 7d --top 20
+sudo serv-kun ssh audit --file /var/log/auth.log.1
+```
+
+Read-only. Reads the systemd journal (`-u ssh -u sshd`), falling back to
+`/var/log/auth.log` or `/var/log/secure`, and summarises the authentication
+activity in the window: the busiest source addresses, the accounts they named,
+and every successful login with its method.
+
+Root is required for a reason — both the journal and `auth.log` are root-only
+on a stock install, so a non-root run would report zero attempts rather than
+fail, which is the most misleading output a security check can produce.
+
+Counts are split along two axes, because a single login attempt writes several
+log lines:
+
+| Counter | What it means |
+|---|---|
+| Rejected credentials | a password or key was offered for a real account and refused |
+| Probes and scans | a username that doesn't exist here, or a connection dropped before authenticating |
+| Successful logins | someone got in |
+
+The findings are then weighed against the running sshd config, since the same
+numbers mean very different things on different servers — a thousand rejected
+passwords is background noise where `PasswordAuthentication no` is set, and an
+active problem where it isn't. Two findings are called out by name:
+
+- an address that **failed and then succeeded**, which is the shape of a
+  brute-force that worked and the one result here that can mean a live
+  intrusion
+- addresses making 50+ attempts, with a pointer to `serv-kun firewall` for
+  rate limiting
+
+#### Distributed attacks
+
+A per-address table can look completely clean during exactly the attack worth
+worrying about. Split a run across two thousand hosts and every row reads "3
+attempts", no rate limit ever fires, and nothing is out of the ordinary at the
+level anyone is looking. So the report also totals across addresses:
+
+- **Volume that no rate limit would have caught** — how many addresses stayed
+  under 10 attempts each, and how many attempts they made between them. Twenty
+  or more such addresses is reported as a distributed attack, along with the
+  two things that do stop one: keys-only authentication, and restricting SSH
+  to known source ranges.
+- **Credential spraying** — the "most-targeted accounts" table counts distinct
+  source addresses per account alongside the attempt total. One account tried
+  from ten or more addresses is a coordinated attempt on a login someone
+  believes exists here, which reads very differently from one bot retrying.
+- **Clustered network blocks** — sources grouped into /24 (IPv4) or /48
+  (IPv6). Botnet nodes and rented ranges cluster, so five addresses in one
+  block is usually one operator, and the report suggests
+  `ufw prepend deny from <block>` rather than chasing the addresses. The
+  `prepend` matters: ufw takes the first matching rule, so a plain `ufw deny
+  from` is appended *after* the SSH allow and never reached. (`ufw insert 1`
+  puts it in the same place but errors on an empty rule list, so `prepend` is
+  the form that works either way. It needs ufw ≥ 0.36, which is what every
+  currently supported Debian and Ubuntu ships.)
+
+Parsing is deliberately tolerant: sshd's wording varies across OpenSSH
+releases and distro patches, so an unrecognised line is skipped rather than
+aborting the run. Every pattern is anchored at the start of the message, so a
+username crafted to look like a log line can't attribute attempts to an
+address of the attacker's choosing.
+
 ### firewall — default-deny inbound
 
 ```bash
@@ -483,6 +560,66 @@ The SSH port is read from the running sshd config rather than assumed to be
 firewall that doesn't allow the port you're connected on is the classic way to
 lose a server. If the port can't be read, you're told so and asked to confirm
 it rather than being shown a guess presented as fact.
+
+#### Rate-limiting SSH
+
+On ufw you're offered `ufw limit` for the SSH rule instead of `ufw allow`: the
+port opens as normal, but a source address that starts 6 or more connections
+within 30 seconds is denied. The limit is **per source**, so an attacker who
+trips it can't lock anyone else out.
+
+It's opt-in because it counts connections, not failures — anything that opens
+SSH sessions in bursts from one address can trip it too. Say no if CI deploys
+over SSH from a fixed IP, or if a NAT'd office shares one public address.
+
+It's offered on ufw only. firewalld's rich-rule `limit` counts matches against
+the rule rather than per source address, so one attacker saturating the budget
+would send every other address — yours included — to the default deny. A
+lockout is a worse outcome than the noise it would suppress.
+
+Rate limiting slows one busy address. It does nothing about the same attack
+split across many addresses, since none of them ever reaches the limit.
+
+#### Restricting SSH to known sources
+
+```
+Restrict SSH to specific source addresses? Yes
+
+Connected over SSH right now:
+  203.0.113.7
+Every one of these must be covered, or its session ends when the policy applies.
+
+Addresses allowed to reach SSH (space-separated CIDR or IP): 203.0.113.0/24
+```
+
+This is the only firewall control that stops a distributed attack: it refuses
+every address not on the list, however few attempts each one makes. It's also
+the fastest way to lose a server, so it defaults to no and is checked before
+it's applied.
+
+The check asks the kernel — `ss -Htn state established sport = :<sshport>` —
+for every address currently connected on the SSH port, and refuses to accept a
+list that leaves any of them out without an explicit opt-in that defaults to
+no. `SSH_CLIENT` would be the obvious source for this and is the wrong one:
+sudo's default `env_reset` drops it, and this command always runs under sudo.
+Asking the kernel also covers a colleague's session rather than only yours.
+
+Include everything that legitimately connects — your office, your VPN, and any
+CI runner that deploys — remembering that a NAT'd office appears as one shared
+address and that a home connection's address usually changes. If you can't
+confirm the full list, answering no leaves SSH open, which is the right
+outcome: a firewall nobody can get past is worse than one an attacker still
+has to guess a key for.
+
+On ufw each source becomes its own rule (`ufw limit from 203.0.113.0/24 to any
+port 22 proto tcp`), since ufw takes one source per rule. On firewalld it
+becomes a rich rule *instead of* an open port — the two aren't additive in the
+helpful direction, and adding both would leave the port reachable from
+everywhere.
+
+Neither of these removes the attack. Keys-only authentication (`ssh harden`)
+is what does that — a distributed guess at a key is not feasible — and `ssh
+audit` tells you whether anything is getting through.
 
 Database ports are deliberately not opened. In the `springboot` stack Postgres
 is never published to the host, so it needs no rule; if you do run Postgres
@@ -653,9 +790,14 @@ What serv-kun adds on top:
   lockout check that refuses to run unless a named non-root user has both a
   working key and usable `sudo`, and drop-in placement that survives
   `50-cloud-init.conf`
+- `ssh audit` — a read-only summary of who has been trying to log in, judged
+  against the running sshd config, calling out any address that failed and
+  then succeeded, and totalling activity across addresses so a distributed
+  attack doesn't read as a clean per-address table
 - `firewall` — default-deny inbound via ufw/firewalld, reading the real SSH
   port from the running sshd and adding allow rules *before* the default
-  policy takes effect
+  policy takes effect, with opt-in per-source rate limiting on SSH and an
+  opt-in source allow-list checked against live sessions before it applies
 - `springboot` — `init`/`setup`/`deploy`/`status`/`logs` for a Dockerized
   Spring Boot + Postgres stack behind nginx, including Let's Encrypt
   bootstrap and health-checked deploys with automatic rollback

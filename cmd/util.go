@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -119,6 +120,28 @@ func validateOptionalPortList(ans interface{}) error {
 		}
 	}
 	return nil
+}
+
+// checkSource validates one firewall source: a CIDR block or a bare address.
+// A rejection here is cheap; the same typo accepted becomes an allow-list
+// that doesn't cover the operator, which costs them the server.
+func checkSource(s string) error {
+	if strings.Contains(s, "/") {
+		if _, err := netip.ParsePrefix(s); err != nil {
+			return fmt.Errorf("%q isn't a valid CIDR block (expected something like 203.0.113.0/24)", s)
+		}
+		return nil
+	}
+	if _, err := netip.ParseAddr(s); err != nil {
+		return fmt.Errorf("%q isn't a valid IP address or CIDR block", s)
+	}
+	return nil
+}
+
+// validateSourceList is a survey validator for a space-separated list of
+// firewall sources.
+func validateSourceList(ans interface{}) error {
+	return validateList(ans, checkSource, "at least one address or CIDR block is required")
 }
 
 func validateList(ans interface{}, check func(string) error, emptyMsg string) error {

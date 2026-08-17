@@ -61,7 +61,7 @@ func TestKnownSubcommandsStillRoute(t *testing.T) {
 	// --help short-circuits before any RunE, so this checks routing without
 	// executing a wizard that would demand root and a live system.
 	for _, path := range [][]string{
-		{"nginx", "setup"}, {"nginx", "ssl"}, {"ssh", "harden"},
+		{"nginx", "setup"}, {"nginx", "ssl"}, {"ssh", "harden"}, {"ssh", "audit"},
 		{"postgres", "setup"}, {"postgres", "backup"}, {"postgres", "restore"},
 		{"springboot", "init"}, {"springboot", "deploy"},
 	} {
@@ -112,7 +112,7 @@ func TestEveryGroupingCommandIsListedAsAParent(t *testing.T) {
 func TestSubcommandsAreRegistered(t *testing.T) {
 	want := map[string][]string{
 		"nginx":      {"setup", "ssl"},
-		"ssh":        {"harden"},
+		"ssh":        {"harden", "audit"},
 		"postgres":   {"setup", "backup", "restore"},
 		"springboot": {"init", "setup", "deploy", "status", "logs"},
 	}

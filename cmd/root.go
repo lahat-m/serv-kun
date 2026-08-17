@@ -21,6 +21,7 @@ Commands:
   user              Create a Linux user with sudo privileges
   ci                Grant the deploy user passwordless sudo for the commands CI runs
   ssh harden        Disable root login and password auth, with a lockout safety check
+  ssh audit         Report SSH login attempts from the logs — who tried, who got in
   firewall          Default-deny inbound firewall allowing SSH, HTTP and HTTPS
   postgres setup    Install PostgreSQL and create a deployment role and database
   postgres backup   Back up a PostgreSQL database to a file
@@ -88,7 +89,7 @@ func showHelp(cmd *cobra.Command, _ []string) error {
 
 func init() {
 	nginxCmd.AddCommand(nginxSetupCmd, nginxSSLCmd)
-	sshCmd.AddCommand(sshHardenCmd)
+	sshCmd.AddCommand(sshHardenCmd, sshAuditCmd)
 	postgresCmd.AddCommand(postgresSetupCmd, postgresBackupCmd, postgresRestoreCmd)
 	springbootCmd.AddCommand(springbootInitCmd, springbootSetupCmd, springbootDeployCmd, springbootStatusCmd, springbootLogsCmd)
 	rootCmd.AddCommand(nginxCmd, userCmd, ciCmd, sshCmd, firewallCmd, postgresCmd, nodeCmd, springbootCmd)
