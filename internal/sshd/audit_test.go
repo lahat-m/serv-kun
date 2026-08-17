@@ -468,6 +468,48 @@ func TestSummarizeClustersSourcesIntoSubnets(t *testing.T) {
 	}
 }
 
+// Two blocks can hold a similar number of addresses and differ by three
+// orders of magnitude in what they did. Ranking by address count printed a
+// sustained attack and a passing sweep as neighbours; only one is worth
+// blocking, so intensity decides the order.
+func TestSubnetsRankSustainedBlocksAboveSweeps(t *testing.T) {
+	var events []Event
+
+	// A sweep: 20 addresses, one probe each, on its way through the internet.
+	for i := range 20 {
+		events = append(events, Event{Kind: Probe, IP: fmt.Sprintf("198.51.100.%d", i+1)})
+	}
+	// A sustained run: 3 addresses, 200 attempts each.
+	for i := range 3 {
+		ip := fmt.Sprintf("203.0.113.%d", i+1)
+		for range 200 {
+			events = append(events, Event{Kind: FailedAuth, IP: ip, User: "root"})
+		}
+	}
+
+	r := Summarize(events)
+
+	if len(r.Subnets) != 2 {
+		t.Fatalf("got %d subnets, want 2: %+v", len(r.Subnets), r.Subnets)
+	}
+	if r.Subnets[0].CIDR != "203.0.113.0/24" {
+		t.Errorf("top block = %q, want 203.0.113.0/24 — a 20-address sweep outranked a sustained run",
+			r.Subnets[0].CIDR)
+	}
+	if got := r.Subnets[0].Intensity(); got != 200 {
+		t.Errorf("sustained Intensity() = %v, want 200", got)
+	}
+	if got := r.Subnets[1].Intensity(); got != 1 {
+		t.Errorf("sweep Intensity() = %v, want 1", got)
+	}
+}
+
+func TestSubnetIntensityHandlesEmptyBlock(t *testing.T) {
+	if got := (Subnet{CIDR: "203.0.113.0/24"}).Intensity(); got != 0 {
+		t.Errorf("Intensity() with no sources = %v, want 0", got)
+	}
+}
+
 // A successful login is not an attack, so it must not inflate a block's
 // numbers and get an operator's own range recommended for a deny rule.
 func TestSubnetsIgnoreSuccessfulLogins(t *testing.T) {

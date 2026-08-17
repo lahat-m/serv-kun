@@ -18,6 +18,7 @@ const (
 	distributedSources = 20 // that many quiet addresses is coordination, not coincidence
 	sprayThreshold     = 10 // one account named from this many addresses
 	clusterThreshold   = 5  // addresses from a single /24 or /48
+	sustainedIntensity = 10 // attempts per address before a block is worth denying
 )
 
 var sshAuditCmd = &cobra.Command{
@@ -182,10 +183,13 @@ func printSubnets(r *sshd.Report) {
 	}
 
 	fmt.Println("Clustered network blocks")
-	fmt.Printf("  %-24s %9s %10s\n", "BLOCK", "ADDRESSES", "ATTEMPTS")
+	fmt.Printf("  %-24s %9s %10s %10s\n", "BLOCK", "ADDRESSES", "ATTEMPTS", "PER ADDR")
 	for _, s := range clustered {
-		fmt.Printf("  %-24s %9d %10d\n", s.CIDR, s.Sources, s.Attempts)
+		fmt.Printf("  %-24s %9d %10d %10.1f\n", s.CIDR, s.Sources, s.Attempts, s.Intensity())
 	}
+	// Without this the two kinds of cluster read alike, and they call for
+	// opposite responses.
+	fmt.Println("  PER ADDR near 1 is an internet-wide sweep passing through, not an attack on you.")
 	fmt.Println()
 }
 
@@ -353,10 +357,18 @@ func printDistributedFindings(r *sshd.Report) {
 	// reached. `insert 1` puts it in the same place but fails outright on an
 	// empty rule list ("Invalid position '1'"), so prepend is the form that
 	// works whether or not the firewall has been set up yet.
-	if len(r.Subnets) > 0 && r.Subnets[0].Sources >= clusterThreshold {
+	//
+	// The intensity floor matters as much as the address count. A block whose
+	// hosts probed once each is a sweep that has already moved on, and
+	// blocking it accomplishes nothing except a firewall rule to maintain
+	// forever. Only a block still working is worth denying.
+	if len(r.Subnets) > 0 &&
+		r.Subnets[0].Sources >= clusterThreshold &&
+		r.Subnets[0].Intensity() >= sustainedIntensity {
 		top := r.Subnets[0]
-		fmt.Printf("  ⚠  %d of those addresses sit in %s alone — one operator, not %d.\n",
-			top.Sources, top.CIDR, top.Sources)
+		fmt.Printf("  ⚠  %d of those addresses sit in %s alone, averaging %.0f attempts\n",
+			top.Sources, top.CIDR, top.Intensity())
+		fmt.Printf("     each (%d in total) — one operator, not %d.\n", top.Attempts, top.Sources)
 		fmt.Println("     Denying the block beats chasing its addresses:")
 		fmt.Printf("         sudo ufw prepend deny from %s\n", top.CIDR)
 		fmt.Println("     (prepend, not deny — an appended rule sits after the SSH allow")

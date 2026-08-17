@@ -529,14 +529,26 @@ level anyone is looking. So the report also totals across addresses:
   from ten or more addresses is a coordinated attempt on a login someone
   believes exists here, which reads very differently from one bot retrying.
 - **Clustered network blocks** — sources grouped into /24 (IPv4) or /48
-  (IPv6). Botnet nodes and rented ranges cluster, so five addresses in one
-  block is usually one operator, and the report suggests
-  `ufw prepend deny from <block>` rather than chasing the addresses. The
-  `prepend` matters: ufw takes the first matching rule, so a plain `ufw deny
-  from` is appended *after* the SSH allow and never reached. (`ufw insert 1`
-  puts it in the same place but errors on an empty rule list, so `prepend` is
-  the form that works either way. It needs ufw ≥ 0.36, which is what every
-  currently supported Debian and Ubuntu ships.)
+  (IPv6). Botnet nodes and rented ranges cluster, so several addresses in one
+  block is usually one operator rather than several.
+
+  Blocks are ranked by **attempts per address**, not by how many addresses
+  they hold, and the `PER ADDR` column shows it. Address count alone cannot
+  tell the two kinds of cluster apart: seven addresses averaging 800 attempts
+  each is an operator working on you, while seven averaging 1 is an
+  internet-wide sweep that touched your block once on its way through every
+  address that exists. They printed as neighbours under the old ordering and
+  they call for opposite responses — the sweep's hosts have already moved on,
+  so blocking them buys nothing but a permanent firewall rule.
+
+  A deny is therefore suggested only for a block that is both clustered (5+
+  addresses) and still working (10+ attempts per address):
+  `ufw prepend deny from <block>`. The `prepend` matters: ufw takes the first
+  matching rule, so a plain `ufw deny from` is appended *after* the SSH allow
+  and never reached. (`ufw insert 1` puts it in the same place but errors on
+  an empty rule list, so `prepend` is the form that works either way. It
+  needs ufw ≥ 0.36, which is what every currently supported Debian and Ubuntu
+  ships.)
 
 Parsing is deliberately tolerant: sshd's wording varies across OpenSSH
 releases and distro patches, so an unrecognised line is skipped rather than

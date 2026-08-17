@@ -92,6 +92,23 @@ type Subnet struct {
 	Attempts int
 }
 
+// Intensity is attempts per address: how hard the block's hosts are working,
+// rather than how many of them there are.
+//
+// Address count alone cannot rank these. Two blocks holding seven addresses
+// each can differ by three orders of magnitude in what they did — one
+// operator running a sustained attack from seven hosts, versus an
+// internet-wide sweep that touched seven addresses in the block once apiece
+// on its way through every address on the internet. Ranking by address count
+// printed those as neighbours; only intensity separates them, and only the
+// first is worth blocking, since the sweep's hosts already moved on.
+func (s Subnet) Intensity() float64 {
+	if s.Sources == 0 {
+		return 0
+	}
+	return float64(s.Attempts) / float64(s.Sources)
+}
+
 // Report is the finished audit.
 type Report struct {
 	LogSource string // where the lines came from, for the header
@@ -448,13 +465,17 @@ func Summarize(events []Event) *Report {
 			r.Subnets = append(r.Subnets, *b)
 		}
 	}
+	// Hardest-working first, not most-populated first — see Intensity.
 	sort.Slice(r.Subnets, func(i, j int) bool {
 		a, b := r.Subnets[i], r.Subnets[j]
-		if a.Sources != b.Sources {
-			return a.Sources > b.Sources
+		if a.Intensity() != b.Intensity() {
+			return a.Intensity() > b.Intensity()
 		}
 		if a.Attempts != b.Attempts {
 			return a.Attempts > b.Attempts
+		}
+		if a.Sources != b.Sources {
+			return a.Sources > b.Sources
 		}
 		return a.CIDR < b.CIDR
 	})
