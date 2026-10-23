@@ -30,6 +30,7 @@ Commands:
   springboot init   Scaffold docker-compose.prod.yml, nginx config, backup script, and CI/CD
   springboot setup  Bootstrap docker, .env.prod, JWT keys, TLS, and bring the stack up
   springboot deploy Pull the latest app image and redeploy, with automatic rollback
+  springboot clean  Delete the stack's containers, images, and build cache, keeping volumes
   springboot status Show container status and check the app's health endpoint
   springboot logs   Tail logs for a compose service`,
 }
@@ -91,7 +92,7 @@ func init() {
 	nginxCmd.AddCommand(nginxSetupCmd, nginxSSLCmd)
 	sshCmd.AddCommand(sshHardenCmd, sshAuditCmd)
 	postgresCmd.AddCommand(postgresSetupCmd, postgresBackupCmd, postgresRestoreCmd)
-	springbootCmd.AddCommand(springbootInitCmd, springbootSetupCmd, springbootDeployCmd, springbootStatusCmd, springbootLogsCmd)
+	springbootCmd.AddCommand(springbootInitCmd, springbootSetupCmd, springbootDeployCmd, springbootCleanCmd, springbootStatusCmd, springbootLogsCmd)
 	rootCmd.AddCommand(nginxCmd, userCmd, ciCmd, sshCmd, firewallCmd, postgresCmd, nodeCmd, springbootCmd)
 }
 

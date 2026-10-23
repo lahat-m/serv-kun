@@ -46,8 +46,11 @@ name: {{.ProjectName}}
 services:
 
   app:
+    # No "build:" stanza on purpose. With one, a host missing the image
+    # silently builds it from whatever is in the working tree instead of
+    # failing, which puts a container into production that no CI run ever
+    # tested. Without one, a missing image is an error naming the tag.
     image: ${APP_IMAGE:?set APP_IMAGE in .env.prod}
-    build: .
     container_name: {{.AppName}}-app
     restart: unless-stopped
     env_file:
