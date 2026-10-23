@@ -3,6 +3,8 @@ package cmd
 import (
 	"reflect"
 	"testing"
+
+	"github.com/lahat-m/serv-kun/internal/compose"
 )
 
 func TestParseComposeVolumes(t *testing.T) {
@@ -79,5 +81,30 @@ func TestCleanPlanValidate(t *testing.T) {
 		if err := c.plan.validate(); (err == nil) != c.ok {
 			t.Errorf("validate(%+v) = %v, want ok=%v", c.plan, err, c.ok)
 		}
+	}
+}
+
+func TestCleanNextStepsBringsUpTheWholeStack(t *testing.T) {
+	proj := compose.Project{Dir: "/opt/splm-mis", File: "docker-compose.prod.yml", EnvFile: ".env.prod"}
+	got := cleanNextSteps(cleanPlan{Containers: true, Images: true}, proj)
+	want := []string{
+		"cd /opt/splm-mis",
+		"sudo docker compose -f docker-compose.prod.yml --env-file .env.prod up -d",
+		"sudo serv-kun springboot status --dir /opt/splm-mis",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestCleanNextStepsReissuesDeletedCerts(t *testing.T) {
+	proj := compose.Project{Dir: "/opt/app", File: "compose.yml", EnvFile: ".env"}
+	plan := cleanPlan{Containers: true, Volumes: []composeVolume{{Key: "certbot-certs", Name: "app_certbot-certs"}}}
+	got := cleanNextSteps(plan, proj)
+	if len(got) != 4 {
+		t.Fatalf("got %q, want tls before the three usual steps", got)
+	}
+	if want := "sudo serv-kun springboot tls --dir /opt/app --compose-file compose.yml --env-file .env"; got[0] != want {
+		t.Errorf("first step = %q, want %q", got[0], want)
 	}
 }
