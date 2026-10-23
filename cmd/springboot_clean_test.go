@@ -1,0 +1,83 @@
+package cmd
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestParseComposeVolumes(t *testing.T) {
+	got, err := parseComposeVolumes(`{
+		"name": "splm-mis",
+		"volumes": {
+			"postgres-data": {"name": "splm-mis_postgres-data"},
+			"certbot-certs": {"name": "splm-mis_certbot-certs"},
+			"shared": {"name": "shared", "external": true}
+		}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []composeVolume{
+		{Key: "certbot-certs", Name: "splm-mis_certbot-certs"},
+		{Key: "postgres-data", Name: "splm-mis_postgres-data"},
+		{Key: "shared", Name: "shared", External: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestParseComposeVolumesNone(t *testing.T) {
+	got, err := parseComposeVolumes(`{"name": "x", "services": {}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %+v, want no volumes", got)
+	}
+}
+
+func TestCleanDefaultsKeepEveryVolume(t *testing.T) {
+	volumes := []composeVolume{
+		{Key: "postgres-data", Name: "p_postgres-data"},
+		{Key: "shared", Name: "shared", External: true},
+	}
+	options, defaults := cleanOptions(volumes)
+	if len(options) != 5 {
+		t.Errorf("got %d options, want 4 fixed + 1 non-external volume: %q", len(options), options)
+	}
+	plan := planFromSelection(defaults, volumes)
+	want := cleanPlan{Containers: true, Images: true, BuilderCache: true, Dangling: true}
+	if !reflect.DeepEqual(plan, want) {
+		t.Errorf("default plan = %+v, want %+v", plan, want)
+	}
+}
+
+func TestPlanFromSelectionPicksVolumes(t *testing.T) {
+	data := composeVolume{Key: "postgres-data", Name: "p_postgres-data"}
+	certs := composeVolume{Key: "certbot-certs", Name: "p_certbot-certs"}
+	plan := planFromSelection([]string{cleanOptContainers, volumeOption(certs)},
+		[]composeVolume{data, certs})
+	want := cleanPlan{Containers: true, Volumes: []composeVolume{certs}}
+	if !reflect.DeepEqual(plan, want) {
+		t.Errorf("plan = %+v, want %+v", plan, want)
+	}
+}
+
+func TestCleanPlanValidate(t *testing.T) {
+	vol := []composeVolume{{Key: "postgres-data", Name: "p_postgres-data"}}
+	cases := []struct {
+		plan cleanPlan
+		ok   bool
+	}{
+		{cleanPlan{BuilderCache: true, Dangling: true}, true},
+		{cleanPlan{Containers: true, Images: true, Volumes: vol}, true},
+		{cleanPlan{Images: true}, false},
+		{cleanPlan{Volumes: vol}, false},
+	}
+	for _, c := range cases {
+		if err := c.plan.validate(); (err == nil) != c.ok {
+			t.Errorf("validate(%+v) = %v, want ok=%v", c.plan, err, c.ok)
+		}
+	}
+}
