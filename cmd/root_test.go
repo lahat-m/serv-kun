@@ -63,7 +63,7 @@ func TestKnownSubcommandsStillRoute(t *testing.T) {
 	for _, path := range [][]string{
 		{"nginx", "setup"}, {"nginx", "ssl"}, {"ssh", "harden"}, {"ssh", "audit"},
 		{"postgres", "setup"}, {"postgres", "backup"}, {"postgres", "restore"},
-		{"springboot", "init"}, {"springboot", "deploy"},
+		{"springboot", "init"}, {"springboot", "deploy"}, {"springboot", "clean"},
 	} {
 		args := append(append([]string{}, path...), "--help")
 		if err := execRoot(t, args...); err != nil {
@@ -114,7 +114,7 @@ func TestSubcommandsAreRegistered(t *testing.T) {
 		"nginx":      {"setup", "ssl"},
 		"ssh":        {"harden", "audit"},
 		"postgres":   {"setup", "backup", "restore"},
-		"springboot": {"init", "setup", "deploy", "status", "logs"},
+		"springboot": {"init", "setup", "deploy", "clean", "status", "logs"},
 	}
 
 	for _, parent := range parentCommands() {
