@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -38,9 +39,11 @@ the content store in a state that fails on a blob that should already be
 cached ("failed commit on ref ... no such file or directory"). Deleting the
 images forces the next deploy to fetch them cleanly.
 
-Deleting the containers stops the site. Nothing is serving between this
-command and the next "springboot deploy", so the images have to come back
-down over the network before the app is up again. Pruning only the builder
+Deleting the containers stops the site, and it stays down until the stack is
+brought back with "docker compose up -d" — not "springboot deploy", which
+recreates only the app service. clean prints the exact commands when it
+finishes. The images have to come back down over the network before the
+app is up again. Pruning only the builder
 cache and dangling images leaves the site running.
 
 The builder cache and dangling images are host-wide, not scoped to this
@@ -289,7 +292,7 @@ func printCleanPlan(plan cleanPlan, volumes []composeVolume, composeFile string)
 	}
 	fmt.Println()
 	if plan.Containers {
-		fmt.Println("The site is down from here until the next 'springboot deploy'.")
+		fmt.Println("The site is down from here until the stack is brought back up.")
 	} else {
 		fmt.Println("The containers are kept, so the site stays up.")
 	}
@@ -354,13 +357,67 @@ func executeCleanPlan(plan cleanPlan, proj compose.Project) error {
 	}
 	fmt.Println()
 	fmt.Println("Bring it back with:")
-	fmt.Printf("  sudo serv-kun springboot deploy --dir %s\n", proj.Dir)
+	for _, step := range cleanNextSteps(plan, proj) {
+		fmt.Printf("  %s\n", step)
+	}
 	if plan.Images {
 		fmt.Println()
-		fmt.Println("The first deploy after a clean re-pulls every image, so it takes")
+		fmt.Println("The first 'up' after a clean re-pulls every image, so it takes")
 		fmt.Println("markedly longer than usual and needs the registry to be reachable.")
 	}
+	if plan.deletes("postgres-data") {
+		fmt.Println()
+		fmt.Println("postgres-data was deleted, so postgres starts with an empty database.")
+	}
 	return nil
+}
+
+// deletes reports whether the plan removes the volume the compose file calls
+// key.
+func (p cleanPlan) deletes(key string) bool {
+	for _, v := range p.Volumes {
+		if v.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanNextSteps is what to run after a clean that took the containers down.
+//
+// Not "springboot deploy": that recreates only the app service (--no-deps),
+// so postgres, nginx, and certbot would stay gone. A plain "up -d" recreates
+// every service and pulls whatever images are missing.
+//
+// "springboot tls" goes first when the certificates were deleted, because
+// nginx refuses to start without the certificate its config names, and tls
+// is what gets nginx up on a placeholder and then issues the real one.
+func cleanNextSteps(plan cleanPlan, proj compose.Project) []string {
+	// Absolute, because --dir defaults to "." and "cd ." tells the operator
+	// nothing once they have moved on to another directory.
+	dir := proj.Dir
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	// The serv-kun steps need the same project this clean ran against, so
+	// non-default file names are carried over rather than silently dropped.
+	flags := "--dir " + dir
+	if proj.File != "docker-compose.prod.yml" {
+		flags += " --compose-file " + proj.File
+	}
+	if proj.EnvFile != ".env.prod" {
+		flags += " --env-file " + proj.EnvFile
+	}
+
+	var steps []string
+	if plan.deletes("certbot-certs") {
+		steps = append(steps, "sudo serv-kun springboot tls "+flags)
+	}
+	return append(steps,
+		"cd "+dir,
+		fmt.Sprintf("sudo docker compose -f %s --env-file %s up -d", proj.File, proj.EnvFile),
+		"sudo serv-kun springboot status "+flags,
+	)
 }
 
 // projectVolumes lists the named volumes the compose file declares, with the
