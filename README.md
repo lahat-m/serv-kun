@@ -330,7 +330,16 @@ the `docker` group.
 sudo serv-kun springboot status   # container status + health endpoint
 sudo serv-kun springboot logs     # tail the app logs
 sudo serv-kun springboot deploy   # manual redeploy, with automatic rollback
+sudo serv-kun springboot tls      # reissue the certificate, without re-running setup
 ```
+
+> **Resetting the stack:** `docker compose down` (no `-v`) rebuilds every
+> container while leaving the volumes alone, which is what you almost always
+> want. `-v` also destroys `certbot-certs` — leaving nginx unable to start and
+> certbot unable to help, because its loop only *renews* certificates that
+> already exist — along with `postgres-data` and, less obviously,
+> `postgres-backups`: the nightly dumps that would have undone the mistake.
+> If you have already done it, `springboot tls` is the way back.
 
 ## Usage
 
