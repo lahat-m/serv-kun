@@ -31,7 +31,7 @@ Commands:
   springboot setup  Bootstrap docker, .env.prod, JWT keys, TLS, and bring the stack up
   springboot deploy Pull the latest app image and redeploy, with automatic rollback
   springboot tls    Issue or reissue the TLS certificate, without re-running setup
-  springboot clean  Delete the stack's containers, images, and build cache, keeping volumes
+  springboot clean  Delete containers, images, and build cache; --all also wipes the volumes
   springboot status Show container status and check the app's health endpoint
   springboot logs   Tail logs for a compose service`,
 }
