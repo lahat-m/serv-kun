@@ -18,7 +18,7 @@ import (
 
 var springbootCleanCmd = &cobra.Command{
 	Use:   "clean",
-	Short: "Delete the stack's containers, images, and build cache, keeping every volume",
+	Short: "Delete the stack's containers, images, and build cache; --all wipes the volumes too",
 	Long: `clean takes the stack down and deletes everything it can be rebuilt from:
 the containers, the images behind every service, and the builder cache.
 
@@ -31,8 +31,13 @@ certbot-certs with it, the mistake the README warns about and that
 "springboot tls" exists to partially undo. Selecting a volume asks again,
 by name, before anything is deleted.
 
-With --yes there is no selection: it deletes the containers, images,
-builder cache, and dangling images, and never a volume.
+To wipe the project and start again from nothing, select "everything" at the
+top of the list, or pass --all. That deletes every volume along with the rest
+— the database, its backups, and the certificate — and asks you to type
+"reset" before it does.
+
+With --yes and no --all there is no selection: it deletes the containers,
+images, builder cache, and dangling images, and never a volume.
 
 Reach for this when the host has run out of disk, or when a pull has left
 the content store in a state that fails on a blob that should already be
@@ -43,8 +48,8 @@ Deleting the containers stops the site, and it stays down until the stack is
 brought back with "docker compose up -d" — not "springboot deploy", which
 recreates only the app service. clean prints the exact commands when it
 finishes. The images have to come back down over the network before the
-app is up again. Pruning only the builder
-cache and dangling images leaves the site running.
+app is up again. Pruning only the builder cache and dangling images leaves
+the site running.
 
 The builder cache and dangling images are host-wide, not scoped to this
 project: on a box running more than this one stack, that reclaims space
@@ -56,6 +61,8 @@ belonging to the others too.`,
 func init() {
 	springbootCleanCmd.Flags().BoolP("yes", "y", false,
 		"skip the prompts and delete everything but the volumes (required when stdin is not a terminal)")
+	springbootCleanCmd.Flags().Bool("all", false,
+		"full reset: also delete every volume — the database, its backups, and the certificate")
 }
 
 // composeVolume is a named volume as compose resolves it: Key is what the
@@ -82,6 +89,7 @@ func (p cleanPlan) empty() bool {
 }
 
 const (
+	cleanOptEverything = "everything       full reset — all of the below, every volume included"
 	cleanOptContainers = "containers       every container in this project (takes the site down)"
 	cleanOptImages     = "images           every image its services run (app, postgres, nginx, certbot)"
 	cleanOptCache      = "builder cache    (host-wide)"
@@ -93,14 +101,35 @@ func volumeOption(v composeVolume) string {
 	return cleanOptVolumePfx + v.Key + "  (data — cannot be pulled back)"
 }
 
+// fullCleanPlan deletes everything clean can: a reset to a project that has
+// never been brought up. External volumes stay out of it for the same reason
+// they are never offered on their own.
+func fullCleanPlan(volumes []composeVolume) cleanPlan {
+	plan := cleanPlan{Containers: true, Images: true, BuilderCache: true, Dangling: true}
+	for _, v := range volumes {
+		if !v.External {
+			plan.Volumes = append(plan.Volumes, v)
+		}
+	}
+	return plan
+}
+
+// isFull reports whether the plan deletes everything fullCleanPlan would —
+// whether it got there through "everything", --all, or ticking every line.
+func (p cleanPlan) isFull(volumes []composeVolume) bool {
+	full := fullCleanPlan(volumes)
+	return p.Containers && p.Images && p.BuilderCache && p.Dangling &&
+		len(p.Volumes) == len(full.Volumes)
+}
+
 // cleanOptions returns the choices offered and the ones selected by default.
 // The default is exactly what --yes deletes, so pressing enter on the prompt
 // and passing --yes do the same thing. External volumes are not offered: they
 // were made outside this project, and clean deleting one would surprise
 // whoever made it.
 func cleanOptions(volumes []composeVolume) (options, defaults []string) {
-	options = []string{cleanOptContainers, cleanOptImages, cleanOptCache, cleanOptDangling}
-	defaults = append([]string(nil), options...)
+	defaults = []string{cleanOptContainers, cleanOptImages, cleanOptCache, cleanOptDangling}
+	options = append([]string{cleanOptEverything}, defaults...)
 	for _, v := range volumes {
 		if !v.External {
 			options = append(options, volumeOption(v))
@@ -114,6 +143,9 @@ func planFromSelection(selected []string, volumes []composeVolume) cleanPlan {
 	chosen := make(map[string]bool, len(selected))
 	for _, s := range selected {
 		chosen[s] = true
+	}
+	if chosen[cleanOptEverything] {
+		return fullCleanPlan(volumes)
 	}
 	plan := cleanPlan{
 		Containers:   chosen[cleanOptContainers],
@@ -164,12 +196,21 @@ func runSpringbootClean(cmd *cobra.Command, _ []string) error {
 	_, defaults := cleanOptions(volumes)
 	plan := planFromSelection(defaults, volumes)
 
+	all, _ := cmd.Flags().GetBool("all")
+	if all {
+		plan = fullCleanPlan(volumes)
+	}
+
 	yes, _ := cmd.Flags().GetBool("yes")
 	if !yes {
 		if !stdinIsTerminal() {
 			return fmt.Errorf("refusing to delete without confirmation and stdin is not a terminal\n\n"+
 				"Re-run with --yes to confirm non-interactively:\n  sudo %s --yes", cmd.CommandPath())
 		}
+	}
+	// --all already says what to delete, so there is nothing to select; it
+	// still gets the typed confirmation below unless --yes was passed too.
+	if !yes && !all {
 		plan, err = askCleanPlan(volumes)
 		if err != nil {
 			return err
@@ -183,7 +224,7 @@ func runSpringbootClean(cmd *cobra.Command, _ []string) error {
 	printCleanPlan(plan, volumes, proj.File)
 
 	if !yes {
-		confirmed, err := confirmCleanPlan(plan)
+		confirmed, err := confirmCleanPlan(plan, plan.isFull(volumes))
 		if err != nil {
 			return err
 		}
@@ -204,7 +245,7 @@ func askCleanPlan(volumes []composeVolume) (cleanPlan, error) {
 		Message: "Select what to delete (anything left unselected is kept):",
 		Options: options,
 		Default: defaults,
-		Help:    "space toggles, enter confirms. Volumes are unselected unless you select them.",
+		Help:    `space toggles, enter confirms. Volumes are unselected unless you select them; "everything" selects them all.`,
 	}, &selected, survey.WithValidator(func(ans interface{}) error {
 		answers, _ := ans.([]core.OptionAnswer)
 		names := make([]string, len(answers))
@@ -222,8 +263,9 @@ func askCleanPlan(volumes []composeVolume) (cleanPlan, error) {
 // confirmCleanPlan asks once for a plan that only deletes what can be pulled
 // or rebuilt again, and makes the operator type the volume names back for one
 // that deletes data: a y pressed out of habit should not be enough to lose a
-// database.
-func confirmCleanPlan(plan cleanPlan) (bool, error) {
+// database. A full reset asks for "reset" instead of the whole list of names,
+// which by then is long enough that typing it proves only patience.
+func confirmCleanPlan(plan cleanPlan, full bool) (bool, error) {
 	if len(plan.Volumes) == 0 {
 		var confirmed bool
 		err := survey.AskOne(&survey.Confirm{
@@ -231,6 +273,14 @@ func confirmCleanPlan(plan cleanPlan) (bool, error) {
 			Default: false,
 		}, &confirmed)
 		return confirmed, err
+	}
+
+	if full {
+		var typed string
+		err := survey.AskOne(&survey.Input{
+			Message: `This wipes the project back to nothing, every volume included. Type "reset" to confirm:`,
+		}, &typed)
+		return strings.TrimSpace(typed) == "reset", err
 	}
 
 	keys := make([]string, len(plan.Volumes))

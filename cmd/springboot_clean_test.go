@@ -45,8 +45,8 @@ func TestCleanDefaultsKeepEveryVolume(t *testing.T) {
 		{Key: "shared", Name: "shared", External: true},
 	}
 	options, defaults := cleanOptions(volumes)
-	if len(options) != 5 {
-		t.Errorf("got %d options, want 4 fixed + 1 non-external volume: %q", len(options), options)
+	if len(options) != 6 {
+		t.Errorf("got %d options, want everything + 4 fixed + 1 non-external volume: %q", len(options), options)
 	}
 	plan := planFromSelection(defaults, volumes)
 	want := cleanPlan{Containers: true, Images: true, BuilderCache: true, Dangling: true}
@@ -106,5 +106,40 @@ func TestCleanNextStepsReissuesDeletedCerts(t *testing.T) {
 	}
 	if want := "sudo serv-kun springboot tls --dir /opt/app --compose-file compose.yml --env-file .env"; got[0] != want {
 		t.Errorf("first step = %q, want %q", got[0], want)
+	}
+}
+
+func TestEverythingSelectsEveryOwnedVolume(t *testing.T) {
+	data := composeVolume{Key: "postgres-data", Name: "p_postgres-data"}
+	certs := composeVolume{Key: "certbot-certs", Name: "p_certbot-certs"}
+	shared := composeVolume{Key: "shared", Name: "shared", External: true}
+	volumes := []composeVolume{data, certs, shared}
+
+	plan := planFromSelection([]string{cleanOptEverything}, volumes)
+	want := cleanPlan{Containers: true, Images: true, BuilderCache: true, Dangling: true,
+		Volumes: []composeVolume{data, certs}}
+	if !reflect.DeepEqual(plan, want) {
+		t.Errorf("plan = %+v, want %+v", plan, want)
+	}
+	if !plan.isFull(volumes) {
+		t.Error("everything should count as a full reset")
+	}
+	if err := plan.validate(); err != nil {
+		t.Errorf("validate() = %v", err)
+	}
+}
+
+func TestIsFullNeedsEveryVolume(t *testing.T) {
+	data := composeVolume{Key: "postgres-data", Name: "p_postgres-data"}
+	certs := composeVolume{Key: "certbot-certs", Name: "p_certbot-certs"}
+	volumes := []composeVolume{data, certs}
+
+	partial := cleanPlan{Containers: true, Images: true, BuilderCache: true, Dangling: true,
+		Volumes: []composeVolume{data}}
+	if partial.isFull(volumes) {
+		t.Error("a plan that keeps certbot-certs is not a full reset")
+	}
+	if !fullCleanPlan(volumes).isFull(volumes) {
+		t.Error("fullCleanPlan should be a full reset")
 	}
 }
